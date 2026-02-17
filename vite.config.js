@@ -1,13 +1,9 @@
 
 import { defineConfig } from 'vite'
 
-// Note: This project is Vanilla JS, so we do not include the React plugin.
-// If you migrate to React later, uncomment the import below and add react() to plugins.
-// import react from '@vitejs/plugin-react'
-
 export default defineConfig({
-    plugins: [], // react() removed
-    base: '/ANTIGRAVITY/', // Importante: Esto permite que los archivos carguen desde la subcarpeta de GitHub
+    plugins: [],
+    base: './', // Cambiado a relativo para evitar errores con el nombre del repositorio (mayúsculas/minúsculas)
     build: {
         outDir: 'dist',
         rollupOptions: {
