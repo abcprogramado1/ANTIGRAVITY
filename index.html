@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sotracor App</title>
+    <meta name="description" content="Aplicación oficial de Sotracor para consulta de reportes.">
+    <link rel="stylesheet" href="./style.css">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#1a1a1a">
+    <link rel="apple-touch-icon" href="icon.svg">
+</head>
+
+<body>
+    <div id="app">
+        <header>
+            <h1>Sotracor</h1>
+            <p>Consulta de Reportes</p>
+        </header>
+
+        <main>
+            <div class="search-container">
+                <label for="placa-input">Ingrese la Placa:</label>
+                <div class="input-group">
+                    <input type="text" id="placa-input" placeholder="Ej: ABC 123" aria-label="Placa del vehículo">
+                    <button id="search-btn">Consultar</button>
+                </div>
+            </div>
+
+            <div id="results-container" class="results-container">
+                <!-- Results will appear here -->
+                <p class="placeholder-text">Ingrese una placa para ver los reportes.</p>
+            </div>
+        </main>
+
+        <footer>
+            <p>&copy; 2026 Sotracor S.A.</p>
+        </footer>
+    </div>
+    <script type="module" src="./src/app.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js')
+                    .then(registration => {
+                        console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                    }, err => {
+                        console.log('ServiceWorker registration failed: ', err);
+                    });
+            });
+        }
+    </script>
+</body>
+
+</html>
