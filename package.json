@@ -1,25 +1,26 @@
 {
   "name": "antigravity",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Sotracor PWA App",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/abcprogramado1/ANTIGRAVITY.git"
   },
   "keywords": [],
-  "author": "",
+  "author": "Sotracor Dev",
   "license": "ISC",
-  "type": "commonjs",
   "bugs": {
     "url": "https://github.com/abcprogramado1/ANTIGRAVITY/issues"
   },
   "homepage": "https://github.com/abcprogramado1/ANTIGRAVITY#readme",
   "dependencies": {
-    "@supabase/supabase-js": "^2.96.0",
-    "vite": "^7.3.1"
+    "@supabase/supabase-js": "^2.39.0",
+    "vite": "^5.0.0"
   }
 }
