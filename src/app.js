@@ -1,10 +1,13 @@
 import { supabase } from './supabaseClient.js'
+import Papa from 'papaparse'
+import * as XLSX from 'xlsx'
 
 // --- State Management ---
 let session = JSON.parse(localStorage.getItem('sotracor_session')) || null;
-let isAdmin = session ? session.role === 'admin' : false;
+let isAdmin = session ? (session.role === 'admin' || session.role === 'ADMIN_TOTAL') : false;
 let currentTab = 'Despachos';
 let realtimeChannel = null;
+let currentLoadedData = []; // Store search results for export
 
 // --- DOM Elements ---
 const loginOverlay = document.getElementById('login-overlay');
@@ -60,7 +63,6 @@ async function login() {
     }
 
     try {
-        // 1. Check Admin Profile
         const { data: admin } = await supabase
             .from('perfiles_admin')
             .select('*')
@@ -80,9 +82,7 @@ async function login() {
             }
         }
 
-        // 2. Check Propietario Profile (Search by Email or Cedula)
         let propQuery = supabase.from('perfiles_propietarios').select('*');
-
         if (input.includes('@')) {
             propQuery = propQuery.eq('email', input);
         } else {
@@ -94,10 +94,9 @@ async function login() {
             propQuery = propQuery.eq('cedula', numCedula);
         }
 
-        const { data: prop, error: propError } = await propQuery.single();
+        const { data: prop } = await propQuery.single();
 
         if (prop) {
-            // Already enrolled
             if (prop.password === password) {
                 await startPropietarioSession(prop);
                 return;
@@ -106,11 +105,8 @@ async function login() {
                 return;
             }
         } else {
-            // Not enrolled yet - Try to register if input is Cedula
             if (!input.includes('@')) {
                 const numCedula = parseInt(input.replace(/[^0-9]+/g, ""));
-
-                // Verify if owner exists in Aportes or Despachos
                 const { data: exists } = await supabase
                     .from('Aportes')
                     .select('Placa, Propietario')
@@ -119,17 +115,15 @@ async function login() {
                     .single();
 
                 if (exists) {
-                    // Automate enrollment
                     const { error: insError } = await supabase
                         .from('perfiles_propietarios')
                         .insert([{
                             cedula: numCedula,
                             password: password,
-                            email: null // Can be updated later
+                            email: null
                         }]);
 
                     if (insError) throw insError;
-
                     alert('¡Registro exitoso! Su perfil ha sido creado automáticamente.');
                     await startPropietarioSession({ cedula: numCedula, email: null });
                     return;
@@ -148,7 +142,6 @@ async function login() {
 
 async function startPropietarioSession(prop) {
     isAdmin = false;
-    // Find linked Placa
     const { data: plateData } = await supabase
         .from('Aportes')
         .select('Placa')
@@ -190,19 +183,18 @@ function showDashboard() {
     isAdmin = session.role === 'admin' || session.role === 'ADMIN_TOTAL';
     const isTotalAdmin = session.role === 'ADMIN_TOTAL';
 
-    // Role Indicator & Admin Interface
     if (isTotalAdmin) {
         userDisplayRole.innerHTML = '<span class="badge badge-admin" style="background: #e11d48; border-color: #be123c;">MODO: ADMINISTRACIÓN GLOBAL</span>';
         placaInput.readOnly = false;
         placaInput.placeholder = "Filtrar cualquier vehículo o ver flota completa...";
         loadPlacaSelector();
+        renderUploadCenter();
     } else if (isAdmin) {
         userDisplayRole.innerHTML = '<span class="badge badge-admin">Modo Administrador</span>';
         placaInput.readOnly = false;
         placaInput.placeholder = "Buscar cualquier placa...";
     } else {
         userDisplayRole.textContent = session.role;
-        // Apply automatic Placa filter if available for Owner
         if (session.placaLinked) {
             placaInput.value = session.placaLinked;
             placaInput.readOnly = true;
@@ -212,7 +204,6 @@ function showDashboard() {
 
     searchData();
 
-    // Tab Event Listeners
     tabButtons.forEach(btn => {
         btn.classList.toggle('active', btn.getAttribute('data-tab') === currentTab);
         btn.onclick = () => {
@@ -220,59 +211,146 @@ function showDashboard() {
             btn.classList.add('active');
             currentTab = btn.getAttribute('data-tab');
             searchData();
+            if (isTotalAdmin) renderUploadCenter(); // Update button label
         };
     });
 }
 
-// --- Data Logic ---
+function renderUploadCenter() {
+    let container = document.getElementById('upload-center-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'upload-center-container';
+        container.className = 'sidebar-nav';
+        container.style.marginTop = '2rem';
+        document.querySelector('.sidebar-nav').after(container);
+    }
+
+    container.innerHTML = `
+        <div class="nav-section">
+            <span class="section-title">UPLOAD CENTER</span>
+            <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 10px;">
+                <input type="file" id="csv-file-input" accept=".csv" style="display: none;">
+                <button id="btn-trigger-upload" class="tab-btn" style="width: 100%; text-align: left; background: #f1f5f9; padding: 10px; display: flex; align-items: center; gap: 8px;">
+                    📁 Cargar CSV (${currentTab})
+                </button>
+                <div id="upload-status" style="font-size: 0.65rem; color: var(--text-muted);">Listo para cargar</div>
+                <div id="upload-progress" style="display:none; height: 4px; background: #eee; border-radius: 2px;">
+                    <div id="upload-progress-fill" style="height:100%; background: var(--primary-green); width: 0%; border-radius: 2px;"></div>
+                </div>
+                <button id="btn-export-excel" class="tab-btn" style="width: 100%; text-align: left; background: #ecfdf5; color: #065f46; padding: 10px; display: flex; align-items: center; gap: 8px;">
+                    📊 Exportar a Excel
+                </button>
+            </div>
+        </div>
+    `;
+
+    const fileInput = document.getElementById('csv-file-input');
+    const btnTrigger = document.getElementById('btn-trigger-upload');
+    const btnExport = document.getElementById('btn-export-excel');
+
+    btnTrigger.onclick = () => fileInput.click();
+    fileInput.onchange = handleFileUpload;
+    btnExport.onclick = exportToExcel;
+}
+
+async function handleFileUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const status = document.getElementById('upload-status');
+    const progress = document.getElementById('upload-progress');
+    const fill = document.getElementById('upload-progress-fill');
+
+    status.textContent = "Procesando archivo...";
+    progress.style.display = 'block';
+
+    Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: async (results) => {
+            const rawData = results.data;
+            const table = currentTab;
+            status.textContent = `Limpiando ${rawData.length} registros...`;
+            const cleanData = rawData.map(row => cleanRow(row, table));
+
+            const chunkSize = 50;
+            for (let i = 0; i < cleanData.length; i += chunkSize) {
+                const chunk = cleanData.slice(i, i + chunkSize);
+                const { error } = await supabase.from(table).insert(chunk);
+                if (error) {
+                    status.innerHTML = `<span style="color:red">Error: ${error.message}</span>`;
+                    return;
+                }
+                const percent = Math.round(((i + chunk.length) / cleanData.length) * 100);
+                fill.style.width = `${percent}%`;
+                status.textContent = `Cargando: ${percent}%...`;
+            }
+
+            status.innerHTML = `<span style="color:green">¡Carga completa (${cleanData.length} filas)!</span>`;
+            searchData();
+        }
+    });
+}
+
+function cleanRow(row, table) {
+    const clean = {};
+    for (let key in row) {
+        let val = row[key];
+        if (key.includes('Vr.') || key.includes('Tarifa') || key.includes('Total') || key.includes('Recaudo') || key.includes('Deuda')) {
+            val = parseFloat(val?.toString().replace(/[^0-9.-]+/g, "")) || 0;
+        }
+        if (key === 'Fecha' && val) {
+            const normalized = val.replace(/-/g, '/');
+            if (normalized.includes('/')) {
+                const parts = normalized.split('/');
+                if (parts.length === 3) {
+                    const [d, m, y] = parts;
+                    val = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+                }
+            }
+        }
+        clean[key] = val;
+    }
+    return clean;
+}
+
+function exportToExcel() {
+    if (!currentLoadedData || currentLoadedData.length === 0) {
+        alert("No hay datos para exportar.");
+        return;
+    }
+    const ws = XLSX.utils.json_to_sheet(currentLoadedData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, currentTab);
+    XLSX.writeFile(wb, `Reporte_Sotracor_${currentTab}_${new Date().getTime()}.xlsx`);
+}
 
 async function searchData() {
     const start = dateStartInput.value;
     const end = dateEndInput.value;
     const placa = placaInput.value.trim().toUpperCase();
-
     resultsContainer.innerHTML = '<div class="placeholder-view"><p class="placeholder-text">Cargando registros...</p></div>';
 
     try {
         let query = supabase.from(currentTab).select('*');
-
-        // Role-Based Filtering Logic (Bypass para ADMIN_TOTAL)
-        const isTotalAdmin = session.role === 'ADMIN_TOTAL';
-
-        if (isTotalAdmin) {
-            // Bypass de Filtros: Si hay input, filtra por placa. Si no, trae TODO (Consolidado).
-            if (placa) {
-                query = query.ilike('Placa', `%${placa}%`);
-            }
-        } else if (isAdmin) {
-            // Administrador Estándar
-            if (placa) {
-                query = query.ilike('Placa', `%${placa}%`);
-            }
+        if (session.role === 'ADMIN_TOTAL' || isAdmin) {
+            if (placa) query = query.ilike('Placa', `%${placa}%`);
         } else {
-            // Propietario Normal: Ver solo sus registros asociados
             query = query.eq('Cedula', session.cedula);
         }
 
-        // Date Range Filtering (Reactivado tras conversión de BD a tipo DATE)
         const dateCol = 'Fecha';
         if (start) query = query.gte(dateCol, start);
         if (end) query = query.lte(dateCol, end);
 
         const { data, error } = await query.order(dateCol, { ascending: false }).limit(100);
-
-        console.log(`[DEBUG] Datos recibidos de ${currentTab}:`, data);
-        if (error) {
-            console.error(`[DEBUG] Error en ${currentTab}:`, error);
-            throw error;
-        }
-
+        if (error) throw error;
+        currentLoadedData = data;
         renderResults(data);
         setupRealtime();
-
     } catch (err) {
-        console.error('Fetch error:', err);
-        resultsContainer.innerHTML = `<div class="placeholder-view"><p class="placeholder-text" style="color: #ef4444;">Error de consulta: ${err.message}. Revisa la consola para más detalles.</p></div>`;
+        resultsContainer.innerHTML = `<div class="placeholder-view"><p class="placeholder-text" style="color: #ef4444;">Error: ${err.message}</p></div>`;
     }
 }
 
@@ -286,47 +364,28 @@ function setupRealtime() {
 function renderResults(data) {
     resultsContainer.innerHTML = '';
     if (!data || data.length === 0) {
-        resultsContainer.innerHTML = '<div class="placeholder-view"><p class="placeholder-text">No se hallaron registros para el criterio seleccionado.</p></div>';
+        resultsContainer.innerHTML = '<div class="placeholder-view"><p class="placeholder-text">No se hallaron registros.</p></div>';
         return;
     }
 
-    // Inicializar acumuladores
-    let totalPlanilla = 0;
-    let totalAportes = 0;
-    let sumCumplimiento = 0;
-    let countAportes = 0;
-
-    let totalTarifaT = 0;
-    let totalDescuentoT = 0;
-    let totalRecaudadoT = 0;
-    let totalProyectadoT = 0;
+    let totalPlanilla = 0, totalAportes = 0, sumCumplimiento = 0, countAportes = 0;
+    let totalTarifaT = 0, totalDescuentoT = 0, totalRecaudadoT = 0, totalProyectadoT = 0;
 
     data.forEach(item => {
-        // Cálculo de totales si es la pestaña de Aportes
         if (currentTab === 'Aportes') {
-            const vPlanilla = parseFloat(item["Vr. Planilla"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
-            const vAportes = parseFloat(item["Vr. Aportes"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
-            const vCump = parseFloat(item["% Cump"]?.toString().replace(',', '.')) || 0;
-
-            totalPlanilla += vPlanilla;
-            totalAportes += vAportes;
-            sumCumplimiento += vCump;
+            totalPlanilla += parseFloat(item["Vr. Planilla"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
+            totalAportes += parseFloat(item["Vr. Aportes"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
+            sumCumplimiento += parseFloat(item["% Cump"]?.toString().replace(',', '.')) || 0;
             countAportes++;
         }
-
-        // Cálculo de totales si es Tiqueteo
         if (currentTab === 'Tiquetes') {
-            const tarifa = parseFloat(item["Tarifa"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
-            const descuento = parseFloat(item["Vr. Descuento"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
-            const recaudado = parseFloat(item["Vr. Recaudo"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
-            const isElectronico = String(item["Electronico"]) === "1";
-
-            if (isElectronico) {
-                totalTarifaT += tarifa;
-                totalDescuentoT += descuento;
-                totalRecaudadoT += recaudado;
+            const t = parseFloat(item["Tarifa"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
+            const d = parseFloat(item["Vr. Descuento"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
+            const r = parseFloat(item["Vr. Recaudo"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
+            if (String(item["Electronico"]) === "1") {
+                totalTarifaT += t; totalDescuentoT += d; totalRecaudadoT += r;
             }
-            totalProyectadoT += recaudado;
+            totalProyectadoT += r;
         }
 
         const card = document.createElement('div');
@@ -336,14 +395,13 @@ function renderResults(data) {
         resultsContainer.appendChild(card);
     });
 
-    // Renderizado de Resumen Tiqueteo (Al principio)
     if (currentTab === 'Tiquetes' && data.length > 0) {
-        const tiqueteoSummary = document.createElement('div');
-        tiqueteoSummary.className = 'vehicle-card summary-card';
-        tiqueteoSummary.style.gridColumn = '1 / -1';
-        tiqueteoSummary.style.border = '2px solid #5b21b6';
-        tiqueteoSummary.style.background = '#f5f3ff';
-        tiqueteoSummary.innerHTML = `
+        const tSummary = document.createElement('div');
+        tSummary.className = 'vehicle-card summary-card';
+        tSummary.style.gridColumn = '1 / -1';
+        tSummary.style.border = '2px solid #5b21b6';
+        tSummary.style.background = '#f5f3ff';
+        tSummary.innerHTML = `
             <div class="card-header" style="background: #5b21b6; color: white;">
                 <span class="vehicle-number" style="background: white; color: #5b21b6;">RESUMEN TIQUETEO</span>
             </div>
@@ -353,31 +411,24 @@ function renderResults(data) {
                     <div class="detail-list">
                         <div class="detail-item"><span class="detail-label">Tarifa Total:</span><span class="detail-value">${fmtMoney(totalTarifaT)}</span></div>
                         <div class="detail-item"><span class="detail-label">Descuentos:</span><span class="detail-value" style="color: #ef4444;">-${fmtMoney(totalDescuentoT)}</span></div>
-                        <div class="detail-item" style="border-top: 1px solid #ddd; padding-top: 8px;">
-                            <span class="detail-label" style="font-weight: 800;">RECAUDADO:</span>
-                            <span class="detail-value" style="color: #16a34a; font-size: 1.1rem;">${fmtMoney(totalRecaudadoT)}</span>
-                        </div>
+                        <div class="detail-item" style="border-top: 1px solid #ddd; padding-top: 8px;"><span class="detail-label" style="font-weight: 800;">RECAUDADO:</span><span class="detail-value" style="color: #16a34a; font-size: 1.1rem;">${fmtMoney(totalRecaudadoT)}</span></div>
                     </div>
                 </div>
                 <div class="card-section" style="border-left: 1px dashed #ddd; padding-left: 1.5rem;">
                     <span class="section-label">PROYECCIÓN GLOBAL</span>
-                    <div class="stat-row">
-                        <span class="stat-value" style="color: #4338ca;">${fmtMoney(totalProyectadoT)}</span>
-                    </div>
+                    <div class="stat-row"><span class="stat-value" style="color: #4338ca;">${fmtMoney(totalProyectadoT)}</span></div>
                     <span class="stat-info">TIQUETEO PROYECTADO</span>
                 </div>
             </div>`;
-        resultsContainer.prepend(tiqueteoSummary);
+        resultsContainer.prepend(tSummary);
     }
-
-    // Añadir Tarjeta de Sumatorias si hay más de un registro y es modo admin
     if (isAdmin && data.length > 1 && currentTab === 'Aportes') {
-        const avgCump = (sumCumplimiento / countAportes).toFixed(2);
-        const summaryCard = document.createElement('div');
-        summaryCard.className = 'vehicle-card summary-card';
-        summaryCard.style.border = '2px solid var(--primary-blue)';
-        summaryCard.style.background = '#f0f9ff';
-        summaryCard.innerHTML = `
+        const avg = (sumCumplimiento / countAportes).toFixed(2);
+        const aSummary = document.createElement('div');
+        aSummary.className = 'vehicle-card summary-card';
+        aSummary.style.border = '2px solid var(--primary-blue)';
+        aSummary.style.background = '#f0f9ff';
+        aSummary.innerHTML = `
             <div class="card-header" style="background: var(--primary-blue); color: white;">
                 <span class="vehicle-number" style="background: white; color: var(--primary-blue);">TOTALES</span>
                 <span class="report-date">${data.length} VEHÍCULOS</span>
@@ -385,46 +436,26 @@ function renderResults(data) {
             <div class="card-body">
                 <div class="card-section">
                     <span class="section-label">TOTAL RECAUDADO FLOTA</span>
-                    <div class="stat-row">
-                        <span class="stat-value" style="color: var(--primary-blue);">${fmtMoney(totalAportes)}</span>
-                        <span class="stat-info">Vr. Aportes</span>
-                    </div>
-                    <div style="display: flex; justify-content: space-between; margin-top: 10px;">
-                        <span style="font-size: 0.75rem; font-weight: 700;">PROMEDIO CUMP:</span>
-                        <span class="badge ${avgCump >= 80 ? 'badge-green' : 'badge-yellow'}">${avgCump}%</span>
-                    </div>
+                    <div class="stat-row"><span class="stat-value" style="color: var(--primary-blue);">${fmtMoney(totalAportes)}</span><span class="stat-info">Vr. Aportes</span></div>
+                    <div style="display: flex; justify-content: space-between; margin-top: 10px;"><span style="font-size: 0.75rem; font-weight: 700;">PROMEDIO CUMP:</span><span class="badge ${avg >= 80 ? 'badge-green' : 'badge-yellow'}">${avg}%</span></div>
                 </div>
                 <div class="card-section" style="margin-top: 15px; border-top: 1px dashed #cbd5e1; padding-top: 15px;">
-                    <div class="detail-list">
-                        <div class="detail-item">
-                            <span class="detail-label">Total Planilla:</span>
-                            <span class="detail-value">${fmtMoney(totalPlanilla)}</span>
-                        </div>
-                    </div>
+                    <div class="detail-list"><div class="detail-item"><span class="detail-label">Total Planilla:</span><span class="detail-value">${fmtMoney(totalPlanilla)}</span></div></div>
                 </div>
             </div>`;
-        resultsContainer.appendChild(summaryCard);
+        resultsContainer.appendChild(aSummary);
     }
 }
 
-// --- Utils ---
 const fmtMoney = (v) => {
     let val = v;
-    if (typeof v === 'string') {
-        val = parseFloat(v.replace(/[^0-9.-]+/g, ""));
-    }
+    if (typeof v === 'string') val = parseFloat(v.replace(/[^0-9.-]+/g, ""));
     if (isNaN(val) || val === null) return '$0';
-
-    return new Intl.NumberFormat('es-CO', {
-        style: 'currency',
-        currency: 'COP',
-        maximumFractionDigits: 0
-    }).format(val);
+    return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(val);
 };
 
 const fmtDate = (d) => {
     if (!d) return '-';
-    // Si la fecha ya viene en formato ISO (YYYY-MM-DD) convertimos a DD/MM/YYYY
     if (d.includes('-') && d.split('-')[0].length === 4) {
         const [y, m, d_part] = d.split('-');
         return `${d_part}/${m}/${y}`;
@@ -432,34 +463,23 @@ const fmtDate = (d) => {
     return d;
 };
 
-// --- Specialized Renderers ---
-
 function renderTiquete(item) {
-    const tarifa = parseFloat(item["Tarifa"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
-    const descuento = parseFloat(item["Vr. Descuento"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
-    const recaudado = parseFloat(item["Vr. Recaudo"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
-    const estado = (item["Estado Envio"] || "SIN ESTADO").toUpperCase();
-
+    const t = parseFloat(item["Tarifa"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
+    const d = parseFloat(item["Vr. Descuento"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
+    const r = parseFloat(item["Vr. Recaudo"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
+    const e = (item["Estado Envio"] || "SIN ESTADO").toUpperCase();
     return `
-        <div class="card-header">
-            <span class="vehicle-number">${item.Placa || 'TKT'}</span>
-            <span class="report-date">${fmtDate(item.Fecha)}</span>
-        </div>
+        <div class="card-header"><span class="vehicle-number">${item.Placa || 'TKT'}</span><span class="report-date">${fmtDate(item.Fecha)}</span></div>
         <div class="card-body">
             <div class="card-section">
                 <span class="section-label">TIQUETE: ${item["No. Tiquete"] || '-'}</span>
-                <div class="stat-row">
-                    <span class="stat-value">${fmtMoney(recaudado)}</span>
-                    <span class="stat-info">Recaudado</span>
-                </div>
-                <div class="badge ${estado === 'DOCUMENTO ENVIADO' ? 'badge-green' : 'badge-yellow'}" style="margin-top: 8px; font-size: 0.6rem;">
-                    ${estado}
-                </div>
+                <div class="stat-row"><span class="stat-value">${fmtMoney(r)}</span><span class="stat-info">Recaudado</span></div>
+                <div class="badge ${e === 'DOCUMENTO ENVIADO' ? 'badge-green' : 'badge-yellow'}" style="margin-top: 8px; font-size: 0.6rem;">${e}</div>
             </div>
             <div class="card-section">
                 <div class="detail-list">
-                    <div class="detail-item"><span class="detail-label">Tarifa:</span><span class="detail-value">${fmtMoney(tarifa)}</span></div>
-                    <div class="detail-item"><span class="detail-label">Descuento:</span><span class="detail-value" style="color: #ef4444;">${descuento > 0 ? '-' : ''}${fmtMoney(descuento)}</span></div>
+                    <div class="detail-item"><span class="detail-label">Tarifa:</span><span class="detail-value">${fmtMoney(t)}</span></div>
+                    <div class="detail-item"><span class="detail-label">Descuento:</span><span class="detail-value" style="color: #ef4444;">${d > 0 ? '-' : ''}${fmtMoney(d)}</span></div>
                     <div class="detail-item"><span class="detail-label">Pasajero:</span><span class="detail-value" style="font-size: 0.7rem;">${item["Nombre del Pasajero"] || '-'}</span></div>
                 </div>
             </div>
@@ -467,100 +487,49 @@ function renderTiquete(item) {
 }
 
 function renderAporte(item) {
-    // Tratamiento de Columnas con Caracteres Especiales (Mapeo CSV exacto)
-    const vrAportesRaw = item["Vr. Aportes"] || '0';
-    const vrPlanillaRaw = item["Vr. Planilla"] || '0';
-    const pctRaw = item["% Cump"] || '0';
-
-    // Conversión de texto a números para listado profesional
-    const vrAportesNum = parseFloat(vrAportesRaw.toString().replace(/[^0-9.-]+/g, "")) || 0;
-    const vrPlanillaNum = parseFloat(vrPlanillaRaw.toString().replace(/[^0-9.-]+/g, "")) || 0;
-    const pctNum = parseFloat(pctRaw.toString().replace(',', '.')) || 0;
-
-    const date = fmtDate(item["Fecha"] || item["Ult. Despacho"]);
-
-    let color = 'low';
-    if (pctNum >= 80) color = 'high';
-    else if (pctNum >= 50) color = 'mid';
-
+    const vA = parseFloat(item["Vr. Aportes"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
+    const vP = parseFloat(item["Vr. Planilla"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
+    const pN = parseFloat(item["% Cump"]?.toString().replace(',', '.')) || 0;
+    let color = pN >= 80 ? 'high' : pN >= 50 ? 'mid' : 'low';
     return `
-        <div class="card-header">
-            <span class="vehicle-number">${item.Placa || 'FLOTA'}</span>
-            <span class="report-date">${date}</span>
-        </div>
+        <div class="card-header"><span class="vehicle-number">${item.Placa || 'FLOTA'}</span><span class="report-date">${fmtDate(item.Fecha)}</span></div>
         <div class="card-body">
             <div class="card-section">
                 <span class="section-label">LIQUIDACIÓN DE FLOTA</span>
-                <div class="stat-row">
-                    <span class="stat-value">${fmtMoney(vrAportesNum)}</span>
-                    <span class="stat-info">Vr. Aportes</span>
-                </div>
-                <div class="progress-bar" style="margin-top: 8px;">
-                    <div class="progress-fill ${color}" style="width: ${Math.min(pctNum, 100)}%;"></div>
-                </div>
-                <div style="display: flex; justify-content: space-between; margin-top: 4px;">
-                    <span style="font-size: 0.65rem; font-weight: 700; color: var(--text-muted);">% CUMPLIMIENTO:</span>
-                    <span class="badge ${pctNum >= 80 ? 'badge-green' : 'badge-yellow'}">${pctNum}%</span>
-                </div>
+                <div class="stat-row"><span class="stat-value">${fmtMoney(vA)}</span><span class="stat-info">Vr. Aportes</span></div>
+                <div class="progress-bar" style="margin-top:8px;"><div class="progress-fill ${color}" style="width: ${Math.min(pN, 100)}%;"></div></div>
+                <div style="display:flex; justify-content:space-between; margin-top:4px;"><span style="font-size:0.65rem; font-weight:700; color:var(--text-muted);">% CUMP:</span><span class="badge ${pN >= 80 ? 'badge-green' : 'badge-yellow'}">${pN}%</span></div>
             </div>
             <div class="card-section">
-                <span class="section-label">DATOS CONSOLIDADOS</span>
                 <div class="detail-list">
-                    <div class="detail-item"><span class="detail-label">Vr. Planilla:</span><span class="detail-value">${fmtMoney(vrPlanillaNum)}</span></div>
-                    <div class="detail-item"><span class="detail-label">Propietario:</span><span class="detail-value" style="font-size: 0.7rem;">${item.Propietario || '-'}</span></div>
-                    <div class="detail-item"><span class="detail-label">Estado:</span><span class="detail-value">${item.Estado || '-'}</span></div>
+                    <div class="detail-item"><span class="detail-label">Vr. Planilla:</span><span class="detail-value">${fmtMoney(vP)}</span></div>
+                    <div class="detail-item"><span class="detail-label">Propietario:</span><span class="detail-value" style="font-size:0.7rem;">${item.Propietario || '-'}</span></div>
                 </div>
             </div>
         </div>`;
 }
 
 function renderGeneric(item) {
-    const val = item['Valor Total'] || item['Total Deuda'] || item['Vr. Aporte'] || '0';
-    const date = fmtDate(item['Fecha']);
+    const v = item['Valor Total'] || item['Total Deuda'] || item['Vr. Aporte'] || '0';
     return `
-        <div class="card-header">
-            <span class="vehicle-number">${item.Placa || 'V-00'}</span>
-            <span class="report-date">${date}</span>
-        </div>
-        <div class="card-body">
-            <div class="stat-row">
-                <span class="stat-value">${fmtMoney(val)}</span>
-                <span class="stat-info">Importe</span>
-            </div>
-            <div class="detail-list" style="margin-top: 1rem;">
-                <div class="detail-item"><span class="detail-label">Referencia:</span><span class="detail-value">${item.Ruta || item.Concepto || item.Agencia || '-'}</span></div>
-                <div class="detail-item"><span class="detail-label">Responsable:</span><span class="detail-value" style="font-size: 0.75rem;">${item.Conductor || item.Propietario || '-'}</span></div>
-            </div>
-        </div>`;
+        <div class="card-header"><span class="vehicle-number">${item.Placa || 'V-00'}</span><span class="report-date">${fmtDate(item.Fecha)}</span></div>
+        <div class="card-body"><div class="stat-row"><span class="stat-value">${fmtMoney(v)}</span><span class="stat-info">Importe</span></div>
+        <div class="detail-list" style="margin-top:1rem;"><div class="detail-item"><span class="detail-label">Referencia:</span><span class="detail-value">${item.Ruta || item.Concepto || item.Agencia || '-'}</span></div></div></div>`;
 }
 
-// --- Global Placa Selector for Super Admin ---
 async function loadPlacaSelector() {
-    try {
-        const { data } = await supabase.from('Aportes').select('Placa');
-        if (!data) return;
-
-        const uniquePlacas = [...new Set(data.map(i => i.Placa))].filter(Boolean).sort();
-
-        let datalist = document.getElementById('placa-list');
-        if (!datalist) {
-            datalist = document.createElement('datalist');
-            datalist.id = 'placa-list';
-            document.body.appendChild(datalist);
-            placaInput.setAttribute('list', 'placa-list');
-        }
-
-        datalist.innerHTML = uniquePlacas.map(p => `<option value="${p}">`).join('');
-    } catch (e) {
-        console.error("Error loading placa selector:", e);
-    }
+    const { data } = await supabase.from('Aportes').select('Placa');
+    if (!data) return;
+    const unique = [...new Set(data.map(i => i.Placa))].filter(Boolean).sort();
+    let datalist = document.getElementById('placa-list') || document.createElement('datalist');
+    datalist.id = 'placa-list'; document.body.appendChild(datalist);
+    placaInput.setAttribute('list', 'placa-list');
+    datalist.innerHTML = unique.map(p => `<option value="${p}">`).join('');
 }
 
-// --- Event Handlers ---
 btnDoLogin.onclick = login;
 btnLogout.onclick = logout;
 placaInput.onkeypress = (e) => { if (e.key === 'Enter') searchData(); };
-placaInput.oninput = () => { if (placaInput.value === '') searchData(); }; // Auto-search if cleared
+placaInput.oninput = () => { if (placaInput.value === '') searchData(); };
 dateStartInput.onchange = searchData;
 dateEndInput.onchange = searchData;
-
