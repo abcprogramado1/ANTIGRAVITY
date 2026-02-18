@@ -4,47 +4,98 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sotracor App</title>
-    <meta name="description" content="Aplicación oficial de Sotracor para consulta de reportes.">
+    <title>Sotracor - Portal Empresa</title>
+    <meta name="description" content="Portal de gestión de flota Sotracor.">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="./style.css">
     <link rel="manifest" href="manifest.json">
-    <meta name="theme-color" content="#1a1a1a">
+    <meta name="theme-color" content="#2563EB">
     <link rel="apple-touch-icon" href="icon.svg">
 </head>
 
 <body>
-    <div id="app">
-        <header>
-            <h1>Sotracor</h1>
-            <p>Consulta de Reportes</p>
-        </header>
-
-        <main>
-            <div class="search-container">
-                <label for="placa-input">Ingrese la Placa:</label>
-                <div class="input-group">
-                    <input type="text" id="placa-input" placeholder="Ej: ABC 123" aria-label="Placa del vehículo">
-                    <button id="search-btn">Consultar</button>
+    <div id="layout">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <img src="./public/icon.svg" alt="Sotracor Logo" class="logo-small">
+                <div class="brand-text">
+                    <span class="brand-name">SOTRACOR</span>
+                    <span class="brand-sub">Evolución en marcha</span>
                 </div>
             </div>
 
-            <div id="results-container" class="results-container">
-                <!-- Results will appear here -->
-                <p class="placeholder-text">Ingrese una placa para ver los reportes.</p>
-            </div>
-        </main>
+            <nav class="sidebar-nav">
+                <div class="nav-section">
+                    <span class="section-title">PORTAL EMPRESA</span>
+                    <p class="section-desc">Gestiona tu flota para propietaros y administradores.</p>
+                </div>
 
-        <footer>
-            <p>&copy; 2026 Sotracor S.A.</p>
-        </footer>
+                <div class="nav-inputs">
+                    <input type="text" placeholder="Usuario / Correo">
+                    <input type="password" placeholder="Contraseña">
+                    <button class="btn-login">INICIAR SESIÓN</button>
+                    <a href="#" class="forgot-pass">¿Olvidaste tu contraseña?</a>
+                </div>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="admin-secure">
+                    <span class="icon">🔒</span>
+                    <div class="admin-text">
+                        <strong>ADMIN SECURE</strong>
+                        <span>Acceso exclusivo para administradores</span>
+                    </div>
+                </div>
+                <button class="btn-auth-access">AUTENTICAR ACCESO</button>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="top-header">
+                <div class="header-logo-container">
+                    <h1 class="main-logo">MIS VEHÍCULOS</h1>
+                    <span class="logo-subtitle">GESTIÓN DE TU FLOTA REGISTRADA</span>
+                </div>
+                <div class="header-actions">
+                    <div class="search-bar">
+                        <span class="search-icon">🔍</span>
+                        <input type="text" id="placa-input" placeholder="Placa o Número interno...">
+                    </div>
+                </div>
+            </header>
+
+            <section class="dashboard-controls">
+                <div class="filter-tabs">
+                    <button class="tab-btn active" id="search-btn">INDIVIDUAL</button>
+                    <button class="tab-btn">CONSOLIDADO</button>
+                </div>
+            </section>
+
+            <div id="results-container" class="dashboard-grid">
+                <!-- Vehicle units will be injected here -->
+                <div class="placeholder-view">
+                    <p class="placeholder-text">Ingrese una placa para consultar la información del vehículo.</p>
+                </div>
+            </div>
+
+            <footer class="app-footer">
+                <p>© 2026 Sotracor S.A. Todos los derechos reservados.</p>
+            </footer>
+        </main>
     </div>
+
     <script type="module" src="./src/app.js"></script>
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('sw.js')
                     .then(registration => {
-                        console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                        console.log('ServiceWorker registration successful');
                     }, err => {
                         console.log('ServiceWorker registration failed: ', err);
                     });

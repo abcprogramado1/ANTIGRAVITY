@@ -43,34 +43,70 @@ async function searchReport() {
 function renderResults(reports) {
     resultsContainer.innerHTML = '';
 
+    if (reports.length === 0) {
+        resultsContainer.innerHTML = `
+            <div class="placeholder-view">
+                <p class="placeholder-text">No se encontraron resultados para esta placa.</p>
+            </div>`;
+        return;
+    }
+
     reports.forEach(report => {
         const card = document.createElement('div');
-        card.className = 'report-card';
+        card.className = 'vehicle-card';
 
-        // Create specific fields based on expected data or fallback
-        // Assuming 'reportes' has standard fields or falling back to generic object rendering
+        // Map database fields to UI
+        const placa = report.Placa || report.placa || 'SIN PLACA';
+        const numInterno = report.Numero || report['Codigo Vehiculo'] || 'S.N.';
+        const aporteValue = report['Vr. Aporte'] || '$0';
+        const conductor = report.Conductor || 'No asignado';
+        const fecha = report.Fecha || 'Sin fecha';
+        const observacion = report.Observacion || 'Sin observaciones';
+        const ruta = report.Ruta || 'Sin ruta';
+        const empresa = report['Empresa Vehiculo'] || 'Sotracor S.A.';
 
-        let contentHtml = '';
+        card.innerHTML = `
+            <div class="card-header">
+                <span class="vehicle-number">${numInterno}</span>
+                <span class="report-date">${fecha}</span>
+            </div>
+            <div class="card-body">
+                <div class="card-section">
+                    <span class="section-label">LIQUIDACIÓN DIARIA</span>
+                    <div class="stat-row">
+                        <span class="stat-value">${aporteValue}</span>
+                        <span class="stat-info">Recaudado</span>
+                    </div>
+                </div>
 
-        // Attempt to identify key fields for a nice display
-        const date = report.fecha || report.created_at || report.Fecha || 'Fecha desconocida';
-        const title = report.titulo || report.tipo || report['Tipo Planilla'] || 'Reporte';
-        const description = report.descripcion || report.Observacion || 'Sin descripción';
+                <div class="card-section">
+                    <span class="section-label">INFORMACIÓN DEL VEHÍCULO</span>
+                    <div class="detail-list">
+                        <div class="detail-item">
+                            <span class="detail-label">Placa:</span>
+                            <span class="detail-value">${placa}</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Empresa:</span>
+                            <span class="detail-value">${empresa}</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Conductor:</span>
+                            <span class="detail-value">${conductor}</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Ruta:</span>
+                            <span class="detail-value">${ruta}</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Observaciones:</span>
+                            <span class="detail-value">${observacion}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
 
-        contentHtml = `
-      <div class="report-header">
-        <span class="report-title">${title}</span>
-        <span class="report-date">${date}</span>
-      </div>
-      <div class="report-body">
-        <p><strong>Placa:</strong> ${report.placa || report.Placa}</p>
-        <p>${description}</p>
-        ${report.Conductor ? `<p><strong>Conductor:</strong> ${report.Conductor}</p>` : ''}
-        ${report.Ruta ? `<p><strong>Ruta:</strong> ${report.Ruta}</p>` : ''}
-      </div>
-    `;
-
-        card.innerHTML = contentHtml;
         resultsContainer.appendChild(card);
     });
 }
