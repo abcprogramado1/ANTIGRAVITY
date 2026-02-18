@@ -457,7 +457,7 @@ async function searchData() {
         if (start) query = query.gte(dateCol, start);
         if (end) query = query.lte(dateCol, end);
 
-        const { data, error } = await query.order(dateCol, { ascending: false }).limit(100);
+        const { data, error } = await query.order(dateCol, { ascending: false }).limit(10000);
         if (error) throw error;
 
         currentLoadedData = data;
