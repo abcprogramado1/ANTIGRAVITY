@@ -9,6 +9,9 @@ let currentTab = 'Despachos';
 let realtimeChannel = null;
 let currentLoadedData = []; // Store search results for export
 
+// Cache for Database Columns to prevent schema errors
+let dbSchemaCache = {};
+
 // --- DOM Elements ---
 const loginOverlay = document.getElementById('login-overlay');
 const dashboardLayout = document.getElementById('layout');
@@ -211,12 +214,11 @@ function showDashboard() {
             btn.classList.add('active');
             currentTab = btn.getAttribute('data-tab');
             searchData();
-            if (isTotalAdmin) renderUploadCenter();
         };
     });
 }
 
-// --- Upload Logic ---
+// --- Upload Logic & Center ---
 
 function renderUploadCenter() {
     let container = document.getElementById('upload-center-container');
@@ -230,103 +232,190 @@ function renderUploadCenter() {
 
     container.innerHTML = `
         <div class="nav-section">
-            <span class="section-title">UPLOAD CENTER</span>
-            <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 10px;">
-                <input type="file" id="csv-file-input" accept=".csv" style="display: none;">
-                <button id="btn-trigger-upload" class="tab-btn" style="width: 100%; text-align: left; background: #f1f5f9; padding: 10px; display: flex; align-items: center; gap: 8px;">
-                    📁 Cargar CSV (${currentTab})
+            <span class="section-title">CENTRO DE CARGA (UPLOAD)</span>
+            <input type="file" id="csv-file-input" accept=".csv" style="display: none;">
+            
+            <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
+                <button class="btn-upload-direct" data-target="Despachos" title="Cargar archivo de Despachos">
+                    🚛 Cargar Despachos
                 </button>
-                <div id="upload-status" style="font-size: 0.65rem; color: var(--text-muted); padding: 5px; word-break: break-all;">Listo para cargar</div>
+                <button class="btn-upload-direct" data-target="Tiquetes" title="Cargar archivo de Tiqueteo">
+                    🎟️ Cargar Tiqueteo
+                </button>
+                <button class="btn-upload-direct" data-target="Aportes" title="Cargar archivo de Aportes/Liquidación">
+                    💰 Cargar Aportes
+                </button>
+                <button class="btn-upload-direct" data-target="Cartera" title="Cargar archivo de Cartera">
+                    📋 Cargar Cartera
+                </button>
+                
+                <div id="upload-status" style="font-size: 0.7rem; color: var(--text-muted); min-height: 20px; line-height: 1.2;">Listo</div>
                 <div id="upload-progress" style="display:none; height: 4px; background: #eee; border-radius: 2px;">
                     <div id="upload-progress-fill" style="height:100%; background: var(--primary-green); width: 0%; border-radius: 2px;"></div>
                 </div>
-                <button id="btn-export-excel" class="tab-btn" style="width: 100%; text-align: left; background: #ecfdf5; color: #065f46; padding: 10px; display: flex; align-items: center; gap: 8px;">
-                    📊 Exportar a Excel
+
+                <hr style="border: none; border-top: 1px solid #eee; margin: 5px 0;">
+                
+                <button id="btn-export-excel" class="tab-btn" style="width: 100%; text-align: left; background: #ecfdf5; color: #065f46; padding: 10px; font-size: 0.8rem; display: flex; align-items: center; gap: 8px;">
+                    📊 Exportar Vista a Excel
                 </button>
             </div>
         </div>
     `;
 
-    const fileInput = document.getElementById('csv-file-input');
-    const btnTrigger = document.getElementById('btn-trigger-upload');
-    const btnExport = document.getElementById('btn-export-excel');
+    // Add styles for the new buttons if they don't exist
+    if (!document.getElementById('upload-btn-styles')) {
+        const style = document.createElement('style');
+        style.id = 'upload-btn-styles';
+        style.textContent = `
+            .btn-upload-direct {
+                width: 100%;
+                text-align: left;
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                padding: 10px;
+                font-size: 0.8rem;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.2s;
+                color: #475569;
+            }
+            .btn-upload-direct:hover {
+                background: #eff6ff;
+                border-color: #3b82f6;
+                color: #2563eb;
+            }
+            .btn-upload-direct:active {
+                transform: scale(0.98);
+            }
+        `;
+        document.head.appendChild(style);
+    }
 
-    btnTrigger.onclick = () => fileInput.click();
-    fileInput.onchange = handleFileUpload;
-    btnExport.onclick = exportToExcel;
+    const fileInput = document.getElementById('csv-file-input');
+    let targetTable = '';
+
+    document.querySelectorAll('.btn-upload-direct').forEach(btn => {
+        btn.onclick = () => {
+            targetTable = btn.getAttribute('data-target');
+            fileInput.click();
+        };
+    });
+
+    fileInput.onchange = (e) => handleFileUpload(e, targetTable);
+    document.getElementById('btn-export-excel').onclick = exportToExcel;
 }
 
-async function handleFileUpload(e) {
+async function handleFileUpload(e, table) {
     const file = e.target.files[0];
-    if (!file) return;
+    if (!file || !table) return;
 
     const status = document.getElementById('upload-status');
     const progress = document.getElementById('upload-progress');
     const fill = document.getElementById('upload-progress-fill');
 
-    status.textContent = "Procesando archivo...";
+    status.innerHTML = `Analizando <b>${table}</b>...`;
     progress.style.display = 'block';
+    fill.style.width = '0%';
 
-    Papa.parse(file, {
-        header: true,
-        skipEmptyLines: true,
-        complete: async (results) => {
-            const rawData = results.data;
-            const table = currentTab;
-
-            // Get database columns to ensure mapping
-            const { data: columnsData } = await supabase.rpc('get_table_columns', { table_name: table });
-            // Fallback if RPC is not available
-            const dbCols = columnsData || [];
-
-            status.textContent = `Limpiando ${rawData.length} registros...`;
-            const cleanData = rawData.map(row => cleanRow(row, table, dbCols));
-
-            const chunkSize = 50;
-            for (let i = 0; i < cleanData.length; i += chunkSize) {
-                const chunk = cleanData.slice(i, i + chunkSize);
-                const { error } = await supabase.from(table).insert(chunk);
-                if (error) {
-                    status.innerHTML = `<span style="color:red">Error: ${error.message}</span>`;
-                    console.error("Insert error:", error);
-                    return;
-                }
-                const percent = Math.round(((i + chunk.length) / cleanData.length) * 100);
-                fill.style.width = `${percent}%`;
-                status.textContent = `Cargando: ${percent}%...`;
+    // Step 1: Ensure we have the schema columns for specific table to avoid "Could not find column" errors
+    try {
+        if (!dbSchemaCache[table]) {
+            // Using a generic query with limit 0 to just get keys is a trick to find columns if RPC is missing
+            const { data: schemaData, error: schemaErr } = await supabase.from(table).select('*').limit(0);
+            if (!schemaErr && schemaData) {
+                // This doesn't work well if table is empty. But our schema mapping is quite fixed.
+                // Let's use the columns found in turn 422 as a base if cache fails.
             }
-
-            status.innerHTML = `<span style="color:green">¡Carga completa (${cleanData.length} filas)!</span>`;
-            searchData();
+            // For now, let's just use the metadata approach
+            dbSchemaCache[table] = await getTableColumns(table);
         }
-    });
+
+        Papa.parse(file, {
+            header: true,
+            skipEmptyLines: true,
+            complete: async (results) => {
+                const rawData = results.data;
+                const columns = dbSchemaCache[table];
+
+                status.innerHTML = `Limpiando <b>${rawData.length}</b> filas...`;
+                const cleanData = rawData.map(row => cleanRow(row, table, columns));
+
+                const chunkSize = 50;
+                for (let i = 0; i < cleanData.length; i += chunkSize) {
+                    const chunk = cleanData.slice(i, i + chunkSize);
+                    const { error } = await supabase.from(table).insert(chunk);
+
+                    if (error) {
+                        status.innerHTML = `<span style="color:red; font-size: 0.6rem;">Error en ${table}: ${error.message}</span>`;
+                        console.error("Insert error details:", error);
+                        progress.style.display = 'none';
+                        return;
+                    }
+
+                    const percent = Math.round(((i + chunk.length) / cleanData.length) * 100);
+                    fill.style.width = `${percent}%`;
+                    status.innerHTML = `Cargando <b>${table}</b>: ${percent}%...`;
+                }
+
+                status.innerHTML = `<span style="color:green; font-weight:bold;">¡${table} cargado! (${cleanData.length} filas)</span>`;
+                e.target.value = ''; // Reset input
+                if (currentTab === table) searchData(); // Refresh if looking at that tab
+            }
+        });
+    } catch (err) {
+        status.innerHTML = `<span style="color:red">Error crítico: ${err.message}</span>`;
+    }
 }
 
-function cleanRow(row, table, dbCols) {
+// Fixed list of columns derived from previous research to ensure we don't insert invalid keys
+async function getTableColumns(table) {
+    // Attempt to get columns from DB metadata
+    const { data, error } = await supabase.rpc('get_table_columns_names', { t_name: table });
+    if (!error && data) return data;
+
+    // Hardcoded fallback based on turn 422 findings
+    const maps = {
+        'Aportes': ['Fecha', 'Placa', 'Propietario', 'Estado', 'Empresa', 'IDConcepto', 'No. Afiliados', '% Cump', 'Vr. Planilla', 'Vr. Aportes', 'Vr. Sobrante', 'Paquete', 'Cedula'],
+        'Tiquetes': ['id', 'Cedula', 'Tarifa', 'Vr. Descuento', 'Valor Total', 'Vr. Recaudo', 'Fecha', 'ID.Usuario', 'Nombre del Pasajero', 'ID Facturado', 'Comprobante', 'Prefijo', 'Estado Envio', 'Electronico', 'Novedad', 'Usuario', 'Telefono', 'Viaje', 'Agencia', 'Placa', 'Destino Pasajero', 'Propietario', 'No. Tiquete', 'Tipo Tiquete'],
+        'Despachos': ['Agencia', 'Fecha', 'Placa', 'Cedula', 'Numero', 'ID.conductor', 'Agencia', 'Codigo Vehiculo', 'Conductor', 'Ruta', 'Destino', 'Vr Aporte Diario'],
+        'Cartera': ['Nombre del Propietario', 'Fecha', 'Documento', 'Concepto', 'Total Deuda', 'Cedula', 'Placa']
+    };
+    return maps[table] || [];
+}
+
+function cleanRow(row, table, allowedCols) {
     const clean = {};
     for (let key in row) {
         let val = row[key];
         let dbKey = key.trim();
 
-        // Normalización de Clave (Casing)
+        // 1. Casing normalization for common fields
         if (dbKey.toLowerCase() === 'cedula') dbKey = 'Cedula';
+        if (dbKey.toLowerCase() === 'placa') dbKey = 'Placa';
+        if (dbKey.toLowerCase() === 'fecha') dbKey = 'Fecha';
 
-        // Limpieza de Columnas Monetarias
-        if (dbKey.includes('Vr.') || dbKey.includes('Tarifa') || dbKey.includes('Total') || dbKey.includes('Recaudo') || dbKey.includes('Deuda')) {
+        // 2. Only keep if column exists in target table (prevent schema cache error)
+        // If we don't have a strict list, we just pass through, but here we try to be strict
+        if (allowedCols.length > 0) {
+            const match = allowedCols.find(c => c.toLowerCase() === dbKey.toLowerCase());
+            if (!match) continue; // Skip extra columns from Excel/CSV like "Agencia" in "Aportes"
+            dbKey = match; // Use the exact casing from DB
+        }
+
+        // 3. Clean money values
+        if (dbKey.includes('Vr.') || dbKey.includes('Tarifa') || dbKey.includes('Total') || dbKey.includes('Recaudo') || dbKey.includes('Deuda') || dbKey.includes('Aporte')) {
             val = parseFloat(val?.toString().replace(/[^0-9.-]+/g, "")) || 0;
         }
 
-        // Normalización de Fechas
-        if ((dbKey.toLowerCase() === 'fecha' || dbKey.includes('Fecha')) && val) {
-            const normalized = val.replace(/-/g, '/');
-            if (normalized.includes('/')) {
-                const parts = normalized.split('/');
-                if (parts.length === 3) {
-                    const [d, m, y] = parts;
-                    // Handle YYYY-MM-DD or DD/MM/YYYY
-                    if (y.length === 4) val = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
-                    else if (d.length === 4) val = `${d}-${m.padStart(2, '0')}-${y.padStart(2, '0')}`;
-                }
+        // 4. Normalizar Fechas (Input can be DD/MM/YYYY or DD-MM-YYYY)
+        if (dbKey === 'Fecha' && val) {
+            const parts = val.toString().replace(/-/g, '/').split('/');
+            if (parts.length === 3) {
+                const [d, m, y] = parts;
+                if (y.length === 4) val = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+                else if (d.length === 4) val = `${d}-${m.padStart(2, '0')}-${y.padStart(2, '0')}`;
             }
         }
 
@@ -337,7 +426,7 @@ function cleanRow(row, table, dbCols) {
 
 function exportToExcel() {
     if (!currentLoadedData || currentLoadedData.length === 0) {
-        alert("No hay datos para exportar.");
+        alert("No hay datos en la vista actual para exportar.");
         return;
     }
     const ws = XLSX.utils.json_to_sheet(currentLoadedData);
@@ -346,13 +435,13 @@ function exportToExcel() {
     XLSX.writeFile(wb, `Reporte_Sotracor_${currentTab}_${new Date().getTime()}.xlsx`);
 }
 
-// --- Data Logic ---
+// --- Data logic (Search & Render) ---
 
 async function searchData() {
     const start = dateStartInput.value;
     const end = dateEndInput.value;
     const placa = placaInput.value.trim().toUpperCase();
-    resultsContainer.innerHTML = '<div class="placeholder-view"><p class="placeholder-text">Cargando registros...</p></div>';
+    resultsContainer.innerHTML = '<div class="placeholder-view"><p class="placeholder-text">Consultando datos...</p></div>';
 
     try {
         let query = supabase.from(currentTab).select('*');
@@ -368,6 +457,7 @@ async function searchData() {
 
         const { data, error } = await query.order(dateCol, { ascending: false }).limit(100);
         if (error) throw error;
+
         currentLoadedData = data;
         renderResults(data);
         setupRealtime();
@@ -387,7 +477,7 @@ function setupRealtime() {
 function renderResults(data) {
     resultsContainer.innerHTML = '';
     if (!data || data.length === 0) {
-        resultsContainer.innerHTML = '<div class="placeholder-view"><p class="placeholder-text">No se hallaron registros.</p></div>';
+        resultsContainer.innerHTML = '<div class="placeholder-view"><p class="placeholder-text">No se hallaron registros para este periodo/filtro.</p></div>';
         return;
     }
 
@@ -426,6 +516,7 @@ function renderResults(data) {
     }
 }
 
+// Summary Component Renderers
 function renderTiqueteSummary(tt, td, tr, tp) {
     const s = document.createElement('div');
     s.className = 'vehicle-card summary-card';
@@ -478,6 +569,7 @@ function renderAporteSummary(ta, tp, sc, ca, count) {
     resultsContainer.appendChild(s);
 }
 
+// Utility Formatters
 const fmtMoney = (v) => {
     let val = v;
     if (typeof v === 'string') val = parseFloat(v.replace(/[^0-9.-]+/g, ""));
@@ -487,6 +579,7 @@ const fmtMoney = (v) => {
 
 const fmtDate = (d) => {
     if (!d) return '-';
+    // Handle ISO date YYYY-MM-DD
     if (d.includes('-') && d.split('-')[0].length === 4) {
         const [y, m, d_part] = d.split('-');
         return `${d_part}/${m}/${y}`;
@@ -494,16 +587,17 @@ const fmtDate = (d) => {
     return d;
 };
 
-// --- Specialized Renderers ---
-
+// Specialized Card Renderers
 function renderTiquete(item) {
+    const tr = item["Vr. Recaudo"] || 0;
+    const ee = (item["Estado Envio"] || '').toUpperCase();
     return `
         <div class="card-header"><span class="vehicle-number">${item.Placa || 'TKT'}</span><span class="report-date">${fmtDate(item.Fecha)}</span></div>
         <div class="card-body">
             <div class="card-section">
                 <span class="section-label">TIQUETE: ${item["No. Tiquete"] || '-'}</span>
-                <div class="stat-row"><span class="stat-value">${fmtMoney(item["Vr. Recaudo"] || 0)}</span><span class="stat-info">Recaudado</span></div>
-                <div class="badge ${(item["Estado Envio"] || '').includes('ENVIADO') ? 'badge-green' : 'badge-yellow'}" style="margin-top: 8px; font-size: 0.6rem;">${item["Estado Envio"] || 'SIN ESTADO'}</div>
+                <div class="stat-row"><span class="stat-value">${fmtMoney(tr)}</span><span class="stat-info">Recaudado</span></div>
+                <div class="badge ${ee.includes('ENVIADO') ? 'badge-green' : 'badge-yellow'}" style="margin-top: 8px; font-size: 0.6rem;">${ee || 'SIN ESTADO'}</div>
             </div>
             <div class="card-section">
                 <div class="detail-list">
@@ -516,6 +610,8 @@ function renderTiquete(item) {
 }
 
 function renderAporte(item) {
+    const va = item["Vr. Aportes"] || 0;
+    const vp = item["Vr. Planilla"] || 0;
     const pN = parseFloat(item["% Cump"]?.toString().replace(',', '.') || 0);
     let color = pN >= 80 ? 'high' : pN >= 50 ? 'mid' : 'low';
     return `
@@ -523,30 +619,31 @@ function renderAporte(item) {
         <div class="card-body">
             <div class="card-section">
                 <span class="section-label">LIQUIDACIÓN DE FLOTA</span>
-                <div class="stat-row"><span class="stat-value">${fmtMoney(item["Vr. Aportes"] || 0)}</span><span class="stat-info">Vr. Aportes</span></div>
+                <div class="stat-row"><span class="stat-value">${fmtMoney(va)}</span><span class="stat-info">Vr. Aportes</span></div>
                 <div class="progress-bar" style="margin-top:8px;"><div class="progress-fill ${color}" style="width: ${Math.min(pN, 100)}%;"></div></div>
                 <div style="display:flex; justify-content:space-between; margin-top:4px;"><span style="font-size:0.65rem; font-weight:700; color:var(--text-muted);">% CUMP:</span><span class="badge ${pN >= 80 ? 'badge-green' : 'badge-yellow'}">${pN}%</span></div>
             </div>
             <div class="card-section">
                 <div class="detail-list">
-                    <div class="detail-item"><span class="detail-label">Vr. Planilla:</span><span class="detail-value">${fmtMoney(item["Vr. Planilla"] || 0)}</span></div>
-                    <div class="detail-item"><span class="detail-label">Propietario:</span><span class="detail-value" style="font-size:0.75rem; text-align:right;">${item.Propietario || '-'}</span></div>
+                    <div class="detail-item"><span class="detail-label">Vr. Planilla:</span><span class="detail-value">${fmtMoney(vp)}</span></div>
+                    <div class="detail-item"><span class="detail-label">Propietario:</span><span class="detail-value" style="font-size:0.7rem; text-align:right;">${item.Propietario || '-'}</span></div>
                 </div>
             </div>
         </div>`;
 }
 
 function renderGeneric(item) {
-    const val = item['Valor Total'] || item['Total Deuda'] || item['Vr. Aporte'] || '0';
+    const val = item['Valor Total'] || item['Total Deuda'] || item['Vr. Aporte'] || item['Vr Aporte Diario'] || 0;
     return `
         <div class="card-header"><span class="vehicle-number">${item.Placa || 'V-00'}</span><span class="report-date">${fmtDate(item.Fecha)}</span></div>
         <div class="card-body"><div class="stat-row"><span class="stat-value">${fmtMoney(val)}</span><span class="stat-info">Importe</span></div>
         <div class="detail-list" style="margin-top:1rem;">
-            <div class="detail-item"><span class="detail-label">Referencia:</span><span class="detail-value">${item.Ruta || item.Concepto || item.Agencia || '-'}</span></div>
-            <div class="detail-item"><span class="detail-label">Responsable:</span><span class="detail-value" style="font-size: 0.75rem;">${item.Conductor || item.Propietario || '-'}</span></div>
+            <div class="detail-item"><span class="detail-label">Ref:</span><span class="detail-value">${item.Ruta || item.Concepto || item.Agencia || item.Documento || '-'}</span></div>
+            <div class="detail-item"><span class="detail-label">Responsable:</span><span class="detail-value" style="font-size: 0.7rem; text-align:right;">${item.Conductor || item.Propietario || item.Usuario || '-'}</span></div>
         </div></div>`;
 }
 
+// Data Helpers
 async function loadPlacaSelector() {
     const { data } = await supabase.from('Aportes').select('Placa');
     if (!data) return;
@@ -557,7 +654,7 @@ async function loadPlacaSelector() {
     datalist.innerHTML = unique.map(p => `<option value="${p}">`).join('');
 }
 
-// --- Event Listeners ---
+// Global Event Listeners
 btnDoLogin.onclick = login;
 btnLogout.onclick = logout;
 placaInput.onkeypress = (e) => { if (e.key === 'Enter') searchData(); };
