@@ -319,9 +319,9 @@ function renderResults(data) {
             const tarifa = parseFloat(item["Tarifa"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
             const descuento = parseFloat(item["Vr. Descuento"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
             const recaudado = parseFloat(item["Vr. Recaudo"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
-            const estadoEnvio = (item["Estado Envio"] || "").toUpperCase();
+            const isElectronico = String(item["Electronico"]) === "1";
 
-            if (estadoEnvio === "DOCUMENTO ENVIADO") {
+            if (isElectronico) {
                 totalTarifaT += tarifa;
                 totalDescuentoT += descuento;
                 totalRecaudadoT += recaudado;
@@ -346,11 +346,10 @@ function renderResults(data) {
         tiqueteoSummary.innerHTML = `
             <div class="card-header" style="background: #5b21b6; color: white;">
                 <span class="vehicle-number" style="background: white; color: #5b21b6;">RESUMEN TIQUETEO</span>
-                <span class="report-date">FILTRADO POR: DOCUMENTO ENVIADO</span>
             </div>
             <div class="card-body" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem;">
                 <div class="card-section">
-                    <span class="section-label">VALORES ENVIADOS</span>
+                    <span class="section-label">TIQUETEO</span>
                     <div class="detail-list">
                         <div class="detail-item"><span class="detail-label">Tarifa Total:</span><span class="detail-value">${fmtMoney(totalTarifaT)}</span></div>
                         <div class="detail-item"><span class="detail-label">Descuentos:</span><span class="detail-value" style="color: #ef4444;">-${fmtMoney(totalDescuentoT)}</span></div>
@@ -365,7 +364,7 @@ function renderResults(data) {
                     <div class="stat-row">
                         <span class="stat-value" style="color: #4338ca;">${fmtMoney(totalProyectadoT)}</span>
                     </div>
-                    <span class="stat-info">TIQUETEO PROYECTADO (TOTAL RECAUDO)</span>
+                    <span class="stat-info">TIQUETEO PROYECTADO</span>
                 </div>
             </div>`;
         resultsContainer.prepend(tiqueteoSummary);
