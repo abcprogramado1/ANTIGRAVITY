@@ -50,9 +50,9 @@ async function login() {
         return;
     }
 
-    // Special Case: Maestro Login
+    // Special Case: Superusuario (Acceso Total)
     if (input === '2@sotracor.com' && password === '123') {
-        session = { email: input, role: 'super_admin', name: 'Super Administrador' };
+        session = { email: input, role: 'ADMIN_TOTAL', name: 'Superusuario Administración' };
         saveSession();
         currentTab = 'Aportes';
         showDashboard();
@@ -187,15 +187,15 @@ function showDashboard() {
 
     userDisplayName.textContent = session.name;
 
-    isAdmin = session.role === 'admin' || session.role === 'super_admin';
-    const isSuperAdmin = session.role === 'super_admin';
+    isAdmin = session.role === 'admin' || session.role === 'ADMIN_TOTAL';
+    const isTotalAdmin = session.role === 'ADMIN_TOTAL';
 
-    // Role Indicator
-    if (isSuperAdmin) {
-        userDisplayRole.innerHTML = '<span class="badge badge-admin">Acceso Total Maestro</span>';
+    // Role Indicator & Admin Interface
+    if (isTotalAdmin) {
+        userDisplayRole.innerHTML = '<span class="badge badge-admin" style="background: #e11d48; border-color: #be123c;">MODO: ADMINISTRACIÓN GLOBAL</span>';
         placaInput.readOnly = false;
-        placaInput.placeholder = "Filtrar por placa o ver todo...";
-        loadPlacaSelector(); // Cargar sugerencias de placas
+        placaInput.placeholder = "Filtrar cualquier vehículo o ver flota completa...";
+        loadPlacaSelector();
     } else if (isAdmin) {
         userDisplayRole.innerHTML = '<span class="badge badge-admin">Modo Administrador</span>';
         placaInput.readOnly = false;
@@ -236,21 +236,21 @@ async function searchData() {
     try {
         let query = supabase.from(currentTab).select('*');
 
-        // Role-Based Filtering Logic
-        const isSuperAdmin = session.role === 'super_admin';
+        // Role-Based Filtering Logic (Bypass para ADMIN_TOTAL)
+        const isTotalAdmin = session.role === 'ADMIN_TOTAL';
 
-        if (isSuperAdmin) {
-            // SUPER_ADMIN Bypass: Only filter if a specific placa is entered
+        if (isTotalAdmin) {
+            // Bypass de Filtros: Si hay input, filtra por placa. Si no, trae TODO (Consolidado).
             if (placa) {
                 query = query.ilike('Placa', `%${placa}%`);
             }
         } else if (isAdmin) {
-            // Standard Admin: Usually wants to filter, but can be global too
+            // Administrador Estándar
             if (placa) {
                 query = query.ilike('Placa', `%${placa}%`);
             }
         } else {
-            // Propietario: Strict filter by Cedula
+            // Propietario Normal: Ver solo sus registros asociados
             query = query.eq('Cedula', session.cedula);
         }
 
@@ -315,41 +315,47 @@ const fmtMoney = (v) => {
 // --- Specialized Renderers ---
 
 function renderAporte(item) {
-    const vrAportes = item['Vr. Aportes'];
-    const vrPlanilla = item['Vr. Planilla'];
-    const pctStr = item['% Cump'] || '0';
-    const pct = parseFloat(pctStr);
-    const date = item['Fecha'] || item['Ult. Despacho'] || '-';
+    // Tratamiento de Columnas con Caracteres Especiales (Mapeo CSV exacto)
+    const vrAportesRaw = item["Vr. Aportes"] || '0';
+    const vrPlanillaRaw = item["Vr. Planilla"] || '0';
+    const pctRaw = item["% Cump"] || '0';
+
+    // Conversión de texto a números para listado profesional
+    const vrAportesNum = parseFloat(vrAportesRaw.toString().replace(/[^0-9.-]+/g, "")) || 0;
+    const vrPlanillaNum = parseFloat(vrPlanillaRaw.toString().replace(/[^0-9.-]+/g, "")) || 0;
+    const pctNum = parseFloat(pctRaw.toString().replace(',', '.')) || 0;
+
+    const date = item["Fecha"] || item["Ult. Despacho"] || '-';
 
     let color = 'low';
-    if (pct >= 80) color = 'high';
-    else if (pct >= 50) color = 'mid';
+    if (pctNum >= 80) color = 'high';
+    else if (pctNum >= 50) color = 'mid';
 
     return `
         <div class="card-header">
-            <span class="vehicle-number">${item.Placa || 'REPORTE'}</span>
+            <span class="vehicle-number">${item.Placa || 'FLOTA'}</span>
             <span class="report-date">${date}</span>
         </div>
         <div class="card-body">
             <div class="card-section">
-                <span class="section-label">LIQUIDACIÓN DE APORTES</span>
+                <span class="section-label">LIQUIDACIÓN DE FLOTA</span>
                 <div class="stat-row">
-                    <span class="stat-value">${fmtMoney(vrAportes)}</span>
-                    <span class="stat-info">Recaudado</span>
+                    <span class="stat-value">${fmtMoney(vrAportesNum)}</span>
+                    <span class="stat-info">Vr. Aportes</span>
                 </div>
                 <div class="progress-bar" style="margin-top: 8px;">
-                    <div class="progress-fill ${color}" style="width: ${Math.min(pct, 100)}%;"></div>
+                    <div class="progress-fill ${color}" style="width: ${Math.min(pctNum, 100)}%;"></div>
                 </div>
                 <div style="display: flex; justify-content: space-between; margin-top: 4px;">
-                    <span style="font-size: 0.65rem; font-weight: 700; color: var(--text-muted);">CUMPLIMIENTO:</span>
-                    <span class="badge ${pct >= 80 ? 'badge-green' : 'badge-yellow'}">${pct}%</span>
+                    <span style="font-size: 0.65rem; font-weight: 700; color: var(--text-muted);">% CUMPLIMIENTO:</span>
+                    <span class="badge ${pctNum >= 80 ? 'badge-green' : 'badge-yellow'}">${pctNum}%</span>
                 </div>
             </div>
             <div class="card-section">
-                <span class="section-label">DETALLES ECONÓMICOS</span>
+                <span class="section-label">DATOS CONSOLIDADOS</span>
                 <div class="detail-list">
-                    <div class="detail-item"><span class="detail-label">Vr. Planilla:</span><span class="detail-value">${fmtMoney(vrPlanilla)}</span></div>
-                    <div class="detail-item"><span class="detail-label">Nro Registro:</span><span class="detail-value">${item['No.'] || '-'}</span></div>
+                    <div class="detail-item"><span class="detail-label">Vr. Planilla:</span><span class="detail-value">${fmtMoney(vrPlanillaNum)}</span></div>
+                    <div class="detail-item"><span class="detail-label">Propietario:</span><span class="detail-value" style="font-size: 0.7rem;">${item.Propietario || '-'}</span></div>
                     <div class="detail-item"><span class="detail-label">Estado:</span><span class="detail-value">${item.Estado || '-'}</span></div>
                 </div>
             </div>
