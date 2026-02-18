@@ -254,12 +254,12 @@ async function searchData() {
             query = query.eq('Cedula', session.cedula);
         }
 
-        // Date Range Filtering (Desactivado temporalmente por formatos de texto inconsistentes en BD)
-        // const dateCol = 'Fecha';
-        // if (start) query = query.gte(dateCol, start);
-        // if (end) query = query.lte(dateCol, end);
+        // Date Range Filtering (Reactivado tras conversión de BD a tipo DATE)
+        const dateCol = 'Fecha';
+        if (start) query = query.gte(dateCol, start);
+        if (end) query = query.lte(dateCol, end);
 
-        const { data, error } = await query.limit(100);
+        const { data, error } = await query.order(dateCol, { ascending: false }).limit(100);
 
         console.log(`[DEBUG] Datos recibidos de ${currentTab}:`, data);
         if (error) {
@@ -422,6 +422,16 @@ const fmtMoney = (v) => {
     }).format(val);
 };
 
+const fmtDate = (d) => {
+    if (!d) return '-';
+    // Si la fecha ya viene en formato ISO (YYYY-MM-DD) convertimos a DD/MM/YYYY
+    if (d.includes('-') && d.split('-')[0].length === 4) {
+        const [y, m, d_part] = d.split('-');
+        return `${d_part}/${m}/${y}`;
+    }
+    return d;
+};
+
 // --- Specialized Renderers ---
 
 function renderTiquete(item) {
@@ -433,7 +443,7 @@ function renderTiquete(item) {
     return `
         <div class="card-header">
             <span class="vehicle-number">${item.Placa || 'TKT'}</span>
-            <span class="report-date">${item.Fecha || '-'}</span>
+            <span class="report-date">${fmtDate(item.Fecha)}</span>
         </div>
         <div class="card-body">
             <div class="card-section">
@@ -467,7 +477,7 @@ function renderAporte(item) {
     const vrPlanillaNum = parseFloat(vrPlanillaRaw.toString().replace(/[^0-9.-]+/g, "")) || 0;
     const pctNum = parseFloat(pctRaw.toString().replace(',', '.')) || 0;
 
-    const date = item["Fecha"] || item["Ult. Despacho"] || '-';
+    const date = fmtDate(item["Fecha"] || item["Ult. Despacho"]);
 
     let color = 'low';
     if (pctNum >= 80) color = 'high';
@@ -506,7 +516,7 @@ function renderAporte(item) {
 
 function renderGeneric(item) {
     const val = item['Valor Total'] || item['Total Deuda'] || item['Vr. Aporte'] || '0';
-    const date = item['Fecha'] || '-';
+    const date = fmtDate(item['Fecha']);
     return `
         <div class="card-header">
             <span class="vehicle-number">${item.Placa || 'V-00'}</span>
