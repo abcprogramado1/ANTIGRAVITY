@@ -290,11 +290,16 @@ function renderResults(data) {
         return;
     }
 
-    // Inicializar acumuladores para sumatorias (Modo Administrador)
+    // Inicializar acumuladores
     let totalPlanilla = 0;
     let totalAportes = 0;
     let sumCumplimiento = 0;
     let countAportes = 0;
+
+    let totalTarifaT = 0;
+    let totalDescuentoT = 0;
+    let totalRecaudadoT = 0;
+    let totalProyectadoT = 0;
 
     data.forEach(item => {
         // Cálculo de totales si es la pestaña de Aportes
@@ -309,11 +314,62 @@ function renderResults(data) {
             countAportes++;
         }
 
+        // Cálculo de totales si es Tiqueteo
+        if (currentTab === 'Tiquetes') {
+            const tarifa = parseFloat(item["Tarifa"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
+            const descuento = parseFloat(item["Vr. Descuento"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
+            const recaudado = parseFloat(item["Vr. Recaudo"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
+            const estadoEnvio = (item["Estado Envio"] || "").toUpperCase();
+
+            if (estadoEnvio === "DOCUMENTO ENVIADO") {
+                totalTarifaT += tarifa;
+                totalDescuentoT += descuento;
+                totalRecaudadoT += recaudado;
+            }
+            totalProyectadoT += recaudado;
+        }
+
         const card = document.createElement('div');
         card.className = 'vehicle-card';
-        card.innerHTML = currentTab === 'Aportes' ? renderAporte(item) : renderGeneric(item);
+        card.innerHTML = currentTab === 'Aportes' ? renderAporte(item) :
+            currentTab === 'Tiquetes' ? renderTiquete(item) : renderGeneric(item);
         resultsContainer.appendChild(card);
     });
+
+    // Renderizado de Resumen Tiqueteo (Al principio)
+    if (currentTab === 'Tiquetes' && data.length > 0) {
+        const tiqueteoSummary = document.createElement('div');
+        tiqueteoSummary.className = 'vehicle-card summary-card';
+        tiqueteoSummary.style.gridColumn = '1 / -1';
+        tiqueteoSummary.style.border = '2px solid #5b21b6';
+        tiqueteoSummary.style.background = '#f5f3ff';
+        tiqueteoSummary.innerHTML = `
+            <div class="card-header" style="background: #5b21b6; color: white;">
+                <span class="vehicle-number" style="background: white; color: #5b21b6;">RESUMEN TIQUETEO</span>
+                <span class="report-date">FILTRADO POR: DOCUMENTO ENVIADO</span>
+            </div>
+            <div class="card-body" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem;">
+                <div class="card-section">
+                    <span class="section-label">VALORES ENVIADOS</span>
+                    <div class="detail-list">
+                        <div class="detail-item"><span class="detail-label">Tarifa Total:</span><span class="detail-value">${fmtMoney(totalTarifaT)}</span></div>
+                        <div class="detail-item"><span class="detail-label">Descuentos:</span><span class="detail-value" style="color: #ef4444;">-${fmtMoney(totalDescuentoT)}</span></div>
+                        <div class="detail-item" style="border-top: 1px solid #ddd; padding-top: 8px;">
+                            <span class="detail-label" style="font-weight: 800;">RECAUDADO:</span>
+                            <span class="detail-value" style="color: #16a34a; font-size: 1.1rem;">${fmtMoney(totalRecaudadoT)}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-section" style="border-left: 1px dashed #ddd; padding-left: 1.5rem;">
+                    <span class="section-label">PROYECCIÓN GLOBAL</span>
+                    <div class="stat-row">
+                        <span class="stat-value" style="color: #4338ca;">${fmtMoney(totalProyectadoT)}</span>
+                    </div>
+                    <span class="stat-info">TIQUETEO PROYECTADO (TOTAL RECAUDO)</span>
+                </div>
+            </div>`;
+        resultsContainer.prepend(tiqueteoSummary);
+    }
 
     // Añadir Tarjeta de Sumatorias si hay más de un registro y es modo admin
     if (isAdmin && data.length > 1 && currentTab === 'Aportes') {
@@ -368,6 +424,38 @@ const fmtMoney = (v) => {
 };
 
 // --- Specialized Renderers ---
+
+function renderTiquete(item) {
+    const tarifa = parseFloat(item["Tarifa"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
+    const descuento = parseFloat(item["Vr. Descuento"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
+    const recaudado = parseFloat(item["Vr. Recaudo"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
+    const estado = (item["Estado Envio"] || "SIN ESTADO").toUpperCase();
+
+    return `
+        <div class="card-header">
+            <span class="vehicle-number">${item.Placa || 'TKT'}</span>
+            <span class="report-date">${item.Fecha || '-'}</span>
+        </div>
+        <div class="card-body">
+            <div class="card-section">
+                <span class="section-label">TIQUETE: ${item["No. Tiquete"] || '-'}</span>
+                <div class="stat-row">
+                    <span class="stat-value">${fmtMoney(recaudado)}</span>
+                    <span class="stat-info">Recaudado</span>
+                </div>
+                <div class="badge ${estado === 'DOCUMENTO ENVIADO' ? 'badge-green' : 'badge-yellow'}" style="margin-top: 8px; font-size: 0.6rem;">
+                    ${estado}
+                </div>
+            </div>
+            <div class="card-section">
+                <div class="detail-list">
+                    <div class="detail-item"><span class="detail-label">Tarifa:</span><span class="detail-value">${fmtMoney(tarifa)}</span></div>
+                    <div class="detail-item"><span class="detail-label">Descuento:</span><span class="detail-value" style="color: #ef4444;">${descuento > 0 ? '-' : ''}${fmtMoney(descuento)}</span></div>
+                    <div class="detail-item"><span class="detail-label">Pasajero:</span><span class="detail-value" style="font-size: 0.7rem;">${item["Nombre del Pasajero"] || '-'}</span></div>
+                </div>
+            </div>
+        </div>`;
+}
 
 function renderAporte(item) {
     // Tratamiento de Columnas con Caracteres Especiales (Mapeo CSV exacto)
