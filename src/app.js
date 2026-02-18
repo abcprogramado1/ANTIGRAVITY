@@ -42,18 +42,17 @@ document.addEventListener('DOMContentLoaded', () => {
 // --- Authentication Logic ---
 
 async function login() {
-    const email = loginEmailInput.value.trim().toLowerCase();
+    const input = loginEmailInput.value.trim().toLowerCase();
     const password = loginPassInput.value.trim();
 
-    if (!email || !password) {
-        alert('Por favor ingrese correo y contraseña.');
+    if (!input || !password) {
+        alert('Por favor ingrese su identificación/correo y contraseña.');
         return;
     }
 
-    // Special Case: Maestro Login (Access 2@sotracor.com / 123)
-    if (email === '2@sotracor.com' && password === '123') {
-        isAdmin = true;
-        session = { email, role: 'admin', name: 'Administrador Maestro' };
+    // Special Case: Maestro Login
+    if (input === '2@sotracor.com' && password === '123') {
+        session = { email: input, role: 'super_admin', name: 'Super Administrador' };
         saveSession();
         currentTab = 'Aportes';
         showDashboard();
@@ -65,51 +64,107 @@ async function login() {
         const { data: admin } = await supabase
             .from('perfiles_admin')
             .select('*')
-            .eq('email', email)
+            .eq('email', input)
             .single();
 
-        if (admin && password === '123') {
-            isAdmin = true;
-            session = { email, role: 'admin', name: 'Administrador' };
-            saveSession();
-            showDashboard();
-            return;
+        if (admin) {
+            if (admin.password === password) {
+                isAdmin = true;
+                session = { email: input, role: 'admin', name: 'Administrador' };
+                saveSession();
+                showDashboard();
+                return;
+            } else {
+                alert('Contraseña de administrador incorrecta.');
+                return;
+            }
         }
 
-        // 2. Check Propietario Profile
-        const { data: prop } = await supabase
-            .from('perfiles_propietarios')
-            .select('*')
-            .eq('email', email)
-            .single();
+        // 2. Check Propietario Profile (Search by Email or Cedula)
+        let propQuery = supabase.from('perfiles_propietarios').select('*');
 
-        if (prop && password === '123') {
-            isAdmin = false;
-            // Find linked Placa from Aportes or Despachos using Cedula
-            const { data: plateData } = await supabase
-                .from('Aportes')
-                .select('Placa')
-                .eq('Cedula', prop.cedula)
-                .limit(1)
-                .single();
-
-            session = {
-                email,
-                role: 'propietario',
-                name: 'Propietario',
-                cedula: prop.cedula,
-                placaLinked: plateData ? plateData.Placa : ''
-            };
-            saveSession();
-            showDashboard();
-            return;
+        if (input.includes('@')) {
+            propQuery = propQuery.eq('email', input);
+        } else {
+            const numCedula = parseInt(input.replace(/[^0-9]+/g, ""));
+            if (isNaN(numCedula)) {
+                alert('La identificación debe ser un número o un correo válido.');
+                return;
+            }
+            propQuery = propQuery.eq('cedula', numCedula);
         }
 
-        alert('Credenciales incorrectas o usuario no encontrado.');
+        const { data: prop, error: propError } = await propQuery.single();
+
+        if (prop) {
+            // Already enrolled
+            if (prop.password === password) {
+                await startPropietarioSession(prop);
+                return;
+            } else {
+                alert('Contraseña incorrecta.');
+                return;
+            }
+        } else {
+            // Not enrolled yet - Try to register if input is Cedula
+            if (!input.includes('@')) {
+                const numCedula = parseInt(input.replace(/[^0-9]+/g, ""));
+
+                // Verify if owner exists in Aportes or Despachos
+                const { data: exists } = await supabase
+                    .from('Aportes')
+                    .select('Placa, Propietario')
+                    .eq('Cedula', numCedula)
+                    .limit(1)
+                    .single();
+
+                if (exists) {
+                    // Automate enrollment
+                    const { error: insError } = await supabase
+                        .from('perfiles_propietarios')
+                        .insert([{
+                            cedula: numCedula,
+                            password: password,
+                            email: null // Can be updated later
+                        }]);
+
+                    if (insError) throw insError;
+
+                    alert('¡Registro exitoso! Su perfil ha sido creado automáticamente.');
+                    await startPropietarioSession({ cedula: numCedula, email: null });
+                    return;
+                } else {
+                    alert('No se encontró un propietario con esa cédula en los registros de Sotracor.');
+                }
+            } else {
+                alert('Correo no registrado. Si es propietario, intente ingresar con su cédula para inscribirse.');
+            }
+        }
     } catch (err) {
         console.error('Login error:', err);
         alert('Error de conexión o validación.');
     }
+}
+
+async function startPropietarioSession(prop) {
+    isAdmin = false;
+    // Find linked Placa
+    const { data: plateData } = await supabase
+        .from('Aportes')
+        .select('Placa')
+        .eq('Cedula', prop.cedula)
+        .limit(1)
+        .single();
+
+    session = {
+        email: prop.email || `${prop.cedula}@propietario.sotracor`,
+        role: 'propietario',
+        name: 'Propietario',
+        cedula: prop.cedula,
+        placaLinked: plateData ? plateData.Placa : ''
+    };
+    saveSession();
+    showDashboard();
 }
 
 function saveSession() {
@@ -132,11 +187,18 @@ function showDashboard() {
 
     userDisplayName.textContent = session.name;
 
+    isAdmin = session.role === 'admin' || session.role === 'super_admin';
+    const isSuperAdmin = session.role === 'super_admin';
+
     // Role Indicator
-    if (isAdmin) {
+    if (isSuperAdmin) {
+        userDisplayRole.innerHTML = '<span class="badge badge-admin">Acceso Total Maestro</span>';
+        placaInput.readOnly = false;
+        placaInput.placeholder = "Filtrar por placa o ver todo...";
+        loadPlacaSelector(); // Cargar sugerencias de placas
+    } else if (isAdmin) {
         userDisplayRole.innerHTML = '<span class="badge badge-admin">Modo Administrador</span>';
         placaInput.readOnly = false;
-        placaInput.style.background = 'white';
         placaInput.placeholder = "Buscar cualquier placa...";
     } else {
         userDisplayRole.textContent = session.role;
@@ -174,14 +236,21 @@ async function searchData() {
     try {
         let query = supabase.from(currentTab).select('*');
 
-        // Role-Based Filtering Logic using isAdmin variable
-        if (isAdmin) {
-            // Admin has global visibility. Filter only if text is in search bar.
+        // Role-Based Filtering Logic
+        const isSuperAdmin = session.role === 'super_admin';
+
+        if (isSuperAdmin) {
+            // SUPER_ADMIN Bypass: Only filter if a specific placa is entered
+            if (placa) {
+                query = query.ilike('Placa', `%${placa}%`);
+            }
+        } else if (isAdmin) {
+            // Standard Admin: Usually wants to filter, but can be global too
             if (placa) {
                 query = query.ilike('Placa', `%${placa}%`);
             }
         } else {
-            // Restricted access for non-admins (Propietarios)
+            // Propietario: Strict filter by Cedula
             query = query.eq('Cedula', session.cedula);
         }
 
@@ -190,20 +259,11 @@ async function searchData() {
         if (start) query = query.gte(dateCol, start);
         if (end) query = query.lte(dateCol, end);
 
-        const { data, error } = await query.order(dateCol, { ascending: false }).limit(100);
+        const { data, error } = await query.limit(100);
 
+        console.log(`[DEBUG] Datos recibidos de ${currentTab}:`, data);
         if (error) {
-            // Fallback for Aportes if 'Fecha' column is missing or named differently
-            if (currentTab === 'Aportes' && error.message.includes('Fecha')) {
-                let fbQuery = supabase.from('Aportes').select('*');
-                if (!isAdmin) fbQuery = fbQuery.eq('Cedula', session.cedula);
-                else if (placa) fbQuery = fbQuery.ilike('Placa', `%${placa}%`);
-
-                const { data: fbData, error: fbErr } = await fbQuery.order('Ult. Despacho', { ascending: false });
-                if (fbErr) throw fbErr;
-                renderResults(fbData);
-                return;
-            }
+            console.error(`[DEBUG] Error en ${currentTab}:`, error);
             throw error;
         }
 
@@ -212,7 +272,7 @@ async function searchData() {
 
     } catch (err) {
         console.error('Fetch error:', err);
-        resultsContainer.innerHTML = `<div class="placeholder-view"><p class="placeholder-text" style="color: #ef4444;">Error de consulta: ${err.message}</p></div>`;
+        resultsContainer.innerHTML = `<div class="placeholder-view"><p class="placeholder-text" style="color: #ef4444;">Error de consulta: ${err.message}. Revisa la consola para más detalles.</p></div>`;
     }
 }
 
@@ -316,9 +376,33 @@ function renderGeneric(item) {
         </div>`;
 }
 
+// --- Global Placa Selector for Super Admin ---
+async function loadPlacaSelector() {
+    try {
+        const { data } = await supabase.from('Aportes').select('Placa');
+        if (!data) return;
+
+        const uniquePlacas = [...new Set(data.map(i => i.Placa))].filter(Boolean).sort();
+
+        let datalist = document.getElementById('placa-list');
+        if (!datalist) {
+            datalist = document.createElement('datalist');
+            datalist.id = 'placa-list';
+            document.body.appendChild(datalist);
+            placaInput.setAttribute('list', 'placa-list');
+        }
+
+        datalist.innerHTML = uniquePlacas.map(p => `<option value="${p}">`).join('');
+    } catch (e) {
+        console.error("Error loading placa selector:", e);
+    }
+}
+
 // --- Event Handlers ---
 btnDoLogin.onclick = login;
 btnLogout.onclick = logout;
 placaInput.onkeypress = (e) => { if (e.key === 'Enter') searchData(); };
+placaInput.oninput = () => { if (placaInput.value === '') searchData(); }; // Auto-search if cleared
 dateStartInput.onchange = searchData;
 dateEndInput.onchange = searchData;
+
