@@ -1,8 +1,8 @@
-
 import { supabase } from './supabaseClient.js'
 
 // --- State Management ---
 let session = JSON.parse(localStorage.getItem('sotracor_session')) || null;
+let isAdmin = session ? session.role === 'admin' : false;
 let currentTab = 'Despachos';
 let realtimeChannel = null;
 
@@ -52,9 +52,8 @@ async function login() {
 
     // Special Case: Maestro Login (Access 2@sotracor.com / 123)
     if (email === '2@sotracor.com' && password === '123') {
-        // Find a linked placa for this "maestro" if possible, or use a default if it's an admin test
-        // For now, treat as high-level access but with automatic filtering if a placa is found
-        session = { email, role: 'admin', name: 'Administrador Maestro', placaLinked: '' };
+        isAdmin = true;
+        session = { email, role: 'admin', name: 'Administrador Maestro' };
         saveSession();
         currentTab = 'Aportes';
         showDashboard();
@@ -69,7 +68,8 @@ async function login() {
             .eq('email', email)
             .single();
 
-        if (admin && password === '123') { // Simplified pass check as per request
+        if (admin && password === '123') {
+            isAdmin = true;
             session = { email, role: 'admin', name: 'Administrador' };
             saveSession();
             showDashboard();
@@ -84,6 +84,7 @@ async function login() {
             .single();
 
         if (prop && password === '123') {
+            isAdmin = false;
             // Find linked Placa from Aportes or Despachos using Cedula
             const { data: plateData } = await supabase
                 .from('Aportes')
@@ -130,12 +131,18 @@ function showDashboard() {
     dashboardLayout.style.display = 'flex';
 
     userDisplayName.textContent = session.name;
-    userDisplayRole.textContent = session.role;
 
-    // Apply automatic Placa filter if available
-    if (session.placaLinked) {
-        placaInput.value = session.placaLinked;
-        if (session.role === 'propietario') {
+    // Role Indicator
+    if (isAdmin) {
+        userDisplayRole.innerHTML = '<span class="badge badge-admin">Modo Administrador</span>';
+        placaInput.readOnly = false;
+        placaInput.style.background = 'white';
+        placaInput.placeholder = "Buscar cualquier placa...";
+    } else {
+        userDisplayRole.textContent = session.role;
+        // Apply automatic Placa filter if available for Owner
+        if (session.placaLinked) {
+            placaInput.value = session.placaLinked;
             placaInput.readOnly = true;
             placaInput.style.background = '#f1f5f9';
         }
@@ -167,29 +174,32 @@ async function searchData() {
     try {
         let query = supabase.from(currentTab).select('*');
 
-        // Automatic Filtering
-        if (session.role === 'propietario') {
+        // Role-Based Filtering Logic using isAdmin variable
+        if (isAdmin) {
+            // Admin has global visibility. Filter only if text is in search bar.
+            if (placa) {
+                query = query.ilike('Placa', `%${placa}%`);
+            }
+        } else {
+            // Restricted access for non-admins (Propietarios)
             query = query.eq('Cedula', session.cedula);
-        } else if (placa) {
-            query = query.ilike('Placa', `%${placa}%`);
         }
 
-        // Date Range Filtering (.gte / .lte)
-        // Most tables use 'Fecha'. Cartera/Aportes might use different ones but we verified 'Fecha' exists in Aportes too recently.
+        // Date Range Filtering
         const dateCol = 'Fecha';
-
         if (start) query = query.gte(dateCol, start);
         if (end) query = query.lte(dateCol, end);
 
         const { data, error } = await query.order(dateCol, { ascending: false }).limit(100);
 
         if (error) {
-            // Fallback for Aportes if 'Fecha' fails (using 'Ult. Despacho' which we saw in schema)
+            // Fallback for Aportes if 'Fecha' column is missing or named differently
             if (currentTab === 'Aportes' && error.message.includes('Fecha')) {
-                const { data: fbData, error: fbErr } = await supabase.from('Aportes')
-                    .select('*')
-                    .eq(session.role === 'propietario' ? 'Cedula' : 'Placa', session.role === 'propietario' ? session.cedula : placa)
-                    .order('Ult. Despacho', { ascending: false });
+                let fbQuery = supabase.from('Aportes').select('*');
+                if (!isAdmin) fbQuery = fbQuery.eq('Cedula', session.cedula);
+                else if (placa) fbQuery = fbQuery.ilike('Placa', `%${placa}%`);
+
+                const { data: fbData, error: fbErr } = await fbQuery.order('Ult. Despacho', { ascending: false });
                 if (fbErr) throw fbErr;
                 renderResults(fbData);
                 return;
@@ -202,7 +212,7 @@ async function searchData() {
 
     } catch (err) {
         console.error('Fetch error:', err);
-        resultsContainer.innerHTML = `<div class="placeholder-view"><p class="placeholder-text" style="color: #ef4444;">Error: ${err.message}</p></div>`;
+        resultsContainer.innerHTML = `<div class="placeholder-view"><p class="placeholder-text" style="color: #ef4444;">Error de consulta: ${err.message}</p></div>`;
     }
 }
 
@@ -229,7 +239,6 @@ function renderResults(data) {
 
 // --- Utils ---
 const fmtMoney = (v) => {
-    // Convert to number explicitly as requested (Data Treatment)
     let val = v;
     if (typeof v === 'string') {
         val = parseFloat(v.replace(/[^0-9.-]+/g, ""));
@@ -246,7 +255,6 @@ const fmtMoney = (v) => {
 // --- Specialized Renderers ---
 
 function renderAporte(item) {
-    // Exact mapping of columns with spaces as requested
     const vrAportes = item['Vr. Aportes'];
     const vrPlanilla = item['Vr. Planilla'];
     const pctStr = item['% Cump'] || '0';
@@ -314,4 +322,3 @@ btnLogout.onclick = logout;
 placaInput.onkeypress = (e) => { if (e.key === 'Enter') searchData(); };
 dateStartInput.onchange = searchData;
 dateEndInput.onchange = searchData;
-

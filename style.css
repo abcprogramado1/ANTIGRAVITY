@@ -615,6 +615,12 @@ body {
   color: #1E40AF;
 }
 
+.badge-admin {
+  background: #1E3A8A;
+  color: white;
+  border: 1px solid #2563EB;
+}
+
 .progress-fill.high {
   background: var(--primary-green);
 }
