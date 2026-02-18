@@ -3,7 +3,7 @@ import { defineConfig } from 'vite'
 
 export default defineConfig({
     plugins: [],
-    base: './', // Cambiado a relativo para evitar errores con el nombre del repositorio (mayúsculas/minúsculas)
+    base: '/ANTIGRAVITY/', // Cambiado a relativo para evitar errores con el nombre del repositorio (mayúsculas/minúsculas)
     build: {
         outDir: 'dist',
         rollupOptions: {

@@ -16,32 +16,15 @@ async function searchReport() {
     resultsContainer.innerHTML = '<p class="placeholder-text">Cargando reportes...</p>';
 
     try {
-        // Attempt query on 'reportes' table first as per instructions
+        // Query 'Despachos' table directly
         let { data, error } = await supabase
-            .from('reportes')
+            .from('Despachos')
             .select('*')
-            .ilike('placa', `%${placa}%`); // Using ilike for partial/case-insensitive match
+            .ilike('Placa', `%${placa}%`)
+            .limit(20);
 
         if (error) {
-            console.error('Error fetching from reportes:', error);
-
-            // Fallback: If table 'reportes' not found, try 'Despachos' (common alternative in transport context)
-            // This is a safety measure if the table name was mistaken in instructions.
-            if (error.code === '42P01') { // undefined_table
-                console.warn("Table 'reportes' not found. Falling back to 'Despachos'.");
-                const fallback = await supabase
-                    .from('Despachos')
-                    .select('*')
-                    .ilike('Placa', `%${placa}%`)
-                    .limit(20); // Limit results for performance
-
-                if (fallback.error) {
-                    throw fallback.error;
-                }
-                data = fallback.data;
-            } else {
-                throw error;
-            }
+            throw error;
         }
 
         if (!data || data.length === 0) {
