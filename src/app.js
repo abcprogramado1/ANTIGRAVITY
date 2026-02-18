@@ -391,25 +391,27 @@ function cleanRow(row, table, allowedCols) {
         let val = row[key];
         let dbKey = key.trim();
 
-        // 1. Casing normalization for common fields
+        // 1. Omitir ID si está vacío para evitar error de violación de PK
+        if (dbKey.toLowerCase() === 'id' && (!val || val === '')) continue;
+
+        // 2. Casing normalization for common fields
         if (dbKey.toLowerCase() === 'cedula') dbKey = 'Cedula';
         if (dbKey.toLowerCase() === 'placa') dbKey = 'Placa';
         if (dbKey.toLowerCase() === 'fecha') dbKey = 'Fecha';
 
-        // 2. Only keep if column exists in target table (prevent schema cache error)
-        // If we don't have a strict list, we just pass through, but here we try to be strict
+        // 3. Only keep if column exists in target table
         if (allowedCols.length > 0) {
             const match = allowedCols.find(c => c.toLowerCase() === dbKey.toLowerCase());
-            if (!match) continue; // Skip extra columns from Excel/CSV like "Agencia" in "Aportes"
-            dbKey = match; // Use the exact casing from DB
+            if (!match) continue;
+            dbKey = match;
         }
 
-        // 3. Clean money values
+        // 4. Clean money values
         if (dbKey.includes('Vr.') || dbKey.includes('Tarifa') || dbKey.includes('Total') || dbKey.includes('Recaudo') || dbKey.includes('Deuda') || dbKey.includes('Aporte')) {
             val = parseFloat(val?.toString().replace(/[^0-9.-]+/g, "")) || 0;
         }
 
-        // 4. Normalizar Fechas (Input can be DD/MM/YYYY or DD-MM-YYYY)
+        // 5. Normalizar Fechas
         if (dbKey === 'Fecha' && val) {
             const parts = val.toString().replace(/-/g, '/').split('/');
             if (parts.length === 3) {
