@@ -16,94 +16,117 @@
     <link rel="apple-touch-icon" href="icon.svg">
 </head>
 
-<body>
-    <div id="layout">
-        <!-- Sidebar -->
-        <aside class="sidebar">
-            <div class="sidebar-header">
-                <img src="./public/icon.svg" alt="Sotracor Logo" class="logo-small">
-                <div class="brand-text">
-                    <span class="brand-name">SOTRACOR</span>
-                    <span class="brand-sub">Evolución en marcha</span>
-                </div>
+<!-- Login Overlay -->
+<div id="login-overlay">
+    <div class="login-card">
+        <div class="login-header">
+            <img src="./public/icon.svg" alt="Sotracor Logo" class="login-logo">
+            <h2>Portal Sotracor</h2>
+            <p>Ingrese sus credenciales para continuar</p>
+        </div>
+        <div class="login-body">
+            <div class="input-group">
+                <label>Correo Electrónico</label>
+                <input type="email" id="login-email" placeholder="ejemplo@sotracor.com">
             </div>
-
-            <nav class="sidebar-nav">
-                <div class="nav-section">
-                    <span class="section-title">PORTAL EMPRESA</span>
-                    <p class="section-desc">Gestiona tu flota para propietaros y administradores.</p>
-                </div>
-
-                <div class="nav-inputs">
-                    <input type="text" placeholder="Usuario / Correo">
-                    <input type="password" placeholder="Contraseña">
-                    <button class="btn-login">INICIAR SESIÓN</button>
-                    <a href="#" class="forgot-pass">¿Olvidaste tu contraseña?</a>
-                </div>
-            </nav>
-
-            <div class="sidebar-footer">
-                <div class="admin-secure">
-                    <span class="icon">🔒</span>
-                    <div class="admin-text">
-                        <strong>ADMIN SECURE</strong>
-                        <span>Acceso exclusivo para administradores</span>
-                    </div>
-                </div>
-                <button class="btn-auth-access">AUTENTICAR ACCESO</button>
+            <div class="input-group">
+                <label>Contraseña</label>
+                <input type="password" id="login-password" placeholder="••••••••">
             </div>
-        </aside>
-
-        <!-- Main Content -->
-        <main class="main-content">
-            <header class="top-header">
-                <div class="header-logo-container">
-                    <h1 class="main-logo">MIS VEHÍCULOS</h1>
-                    <span class="logo-subtitle">GESTIÓN DE TU FLOTA REGISTRADA</span>
-                </div>
-                <div class="header-actions">
-                    <div class="search-bar">
-                        <span class="search-icon">🔍</span>
-                        <input type="text" id="placa-input" placeholder="Placa o Número interno...">
-                    </div>
-                </div>
-            </header>
-
-            <section class="dashboard-controls">
-                <div class="filter-tabs">
-                    <button class="tab-btn active" data-tab="Despachos">DESPACHOS</button>
-                    <button class="tab-btn" data-tab="Cartera">CARTERA</button>
-                    <button class="tab-btn" data-tab="Tiquetes">TIQUETEO</button>
-                    <button class="tab-btn" data-tab="Aportes">APORTES</button>
-                </div>
-            </section>
-
-            <div id="results-container" class="dashboard-grid">
-                <!-- Vehicle units will be injected here -->
-                <div class="placeholder-view">
-                    <p class="placeholder-text">Ingrese una placa para consultar la información del vehículo.</p>
-                </div>
-            </div>
-
-            <footer class="app-footer">
-                <p>© 2026 Sotracor S.A. Todos los derechos reservados.</p>
-            </footer>
-        </main>
+            <button id="btn-do-login" class="btn-primary-full">INICIAR SESIÓN</button>
+        </div>
+        <div class="login-footer">
+            <p>© 2026 Sotracor S.A.</p>
+        </div>
     </div>
+</div>
 
-    <script type="module" src="./src/app.js"></script>
-    <script>
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('sw.js')
-                    .then(registration => {
-                        console.log('ServiceWorker registration successful');
-                    }, err => {
-                        console.log('ServiceWorker registration failed: ', err);
-                    });
-            });
-        }
-    </script>
+<div id="layout" style="display: none;">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <img src="./public/icon.svg" alt="Sotracor Logo" class="logo-small">
+            <div class="brand-text">
+                <span class="brand-name">SOTRACOR</span>
+                <span class="brand-sub">Evolución en marcha</span>
+            </div>
+        </div>
+
+        <div class="user-profile-card">
+            <div class="user-avatar">👤</div>
+            <div class="user-info">
+                <span id="user-display-name" class="user-name">Usuario</span>
+                <span id="user-display-role" class="user-role">Perfil</span>
+            </div>
+            <button id="btn-logout" class="btn-logout-small" title="Cerrar Sessión">✕</button>
+        </div>
+
+        <nav class="sidebar-nav">
+            <div class="nav-section">
+                <span class="section-title">MENÚ PRINCIPAL</span>
+                <p class="section-desc">Seleccione una categoría para ver los reportes detallados.</p>
+            </div>
+            <!-- ... other items if any ... -->
+        </nav>
+
+        <div class="sidebar-footer">
+            <div class="admin-secure">
+                <span class="icon">🔒</span>
+                <div class="admin-text">
+                    <strong>ZONA SEGURA</strong>
+                    <span>Cifrado de grado bancario</span>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <header class="top-header">
+            <div class="header-logo-container">
+                <h1 class="main-logo">DASHBOARD</h1>
+                <span class="logo-subtitle">REPORTE INTEGRADO DE GESTIÓN</span>
+            </div>
+            <div class="header-actions">
+                <div class="date-filters">
+                    <div class="date-group">
+                        <label>Desde:</label>
+                        <input type="date" id="date-start">
+                    </div>
+                    <div class="date-group">
+                        <label>Hasta:</label>
+                        <input type="date" id="date-end">
+                    </div>
+                </div>
+                <div class="search-bar">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" id="placa-input" placeholder="Placa o Número interno...">
+                </div>
+            </div>
+        </header>
+
+        <section class="dashboard-controls">
+            <div class="filter-tabs">
+                <button class="tab-btn active" data-tab="Despachos">DESPACHOS</button>
+                <button class="tab-btn" data-tab="Cartera">CARTERA</button>
+                <button class="tab-btn" data-tab="Tiquetes">TIQUETEO</button>
+                <button class="tab-btn" data-tab="Aportes">APORTES</button>
+            </div>
+        </section>
+
+        <div id="results-container" class="dashboard-grid">
+            <div class="placeholder-view">
+                <p class="placeholder-text">Consultando datos...</p>
+            </div>
+        </div>
+
+        <footer class="app-footer">
+            <p>© 2026 Sotracor S.A. Todos los derechos reservados.</p>
+        </footer>
+    </main>
+</div>
+
+<script type="module" src="./src/app.js"></script>
 </body>
 
 </html>

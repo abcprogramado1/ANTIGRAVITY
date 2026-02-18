@@ -1,215 +1,317 @@
 
 import { supabase } from './supabaseClient.js'
 
+// --- State Management ---
+let session = JSON.parse(localStorage.getItem('sotracor_session')) || null;
 let currentTab = 'Despachos';
-let currentPlaca = '';
 let realtimeChannel = null;
 
+// --- DOM Elements ---
+const loginOverlay = document.getElementById('login-overlay');
+const dashboardLayout = document.getElementById('layout');
+const loginEmailInput = document.getElementById('login-email');
+const loginPassInput = document.getElementById('login-password');
+const btnDoLogin = document.getElementById('btn-do-login');
+const btnLogout = document.getElementById('btn-logout');
+
+const userDisplayName = document.getElementById('user-display-name');
+const userDisplayRole = document.getElementById('user-display-role');
+
+const dateStartInput = document.getElementById('date-start');
+const dateEndInput = document.getElementById('date-end');
 const placaInput = document.getElementById('placa-input');
 const resultsContainer = document.getElementById('results-container');
 const tabButtons = document.querySelectorAll('.tab-btn');
 
 // --- Initialization ---
-
-// Add event listeners to tabs
-tabButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
-        tabButtons.forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        currentTab = btn.getAttribute('data-tab');
-        if (currentPlaca) {
-            searchData();
-        }
-    });
-});
-
-// Search on enter
-placaInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
-        currentPlaca = placaInput.value.trim().toUpperCase();
-        if (currentPlaca) {
-            searchData();
-        }
+document.addEventListener('DOMContentLoaded', () => {
+    if (session) {
+        showDashboard();
+    } else {
+        showLogin();
     }
+
+    // Set default dates (Last 30 days)
+    const today = new Date();
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(today.getDate() - 30);
+    dateStartInput.value = thirtyDaysAgo.toISOString().split('T')[0];
+    dateEndInput.value = today.toISOString().split('T')[0];
 });
 
-// --- Core Logic ---
+// --- Authentication Logic ---
 
-async function searchData() {
-    if (!currentPlaca) return;
+async function login() {
+    const email = loginEmailInput.value.trim().toLowerCase();
+    const password = loginPassInput.value.trim();
 
-    resultsContainer.innerHTML = '<div class="placeholder-view"><p class="placeholder-text">Consultando datos en tiempo real...</p></div>';
+    if (!email || !password) {
+        alert('Por favor ingrese correo y contraseña.');
+        return;
+    }
+
+    // Special Case: Maestro Login (Access 2@sotracor.com / 123)
+    if (email === '2@sotracor.com' && password === '123') {
+        // Find a linked placa for this "maestro" if possible, or use a default if it's an admin test
+        // For now, treat as high-level access but with automatic filtering if a placa is found
+        session = { email, role: 'admin', name: 'Administrador Maestro', placaLinked: '' };
+        saveSession();
+        currentTab = 'Aportes';
+        showDashboard();
+        return;
+    }
 
     try {
-        // Query the selected table filtered by Placa
-        const { data, error } = await supabase
-            .from(currentTab)
+        // 1. Check Admin Profile
+        const { data: admin } = await supabase
+            .from('perfiles_admin')
             .select('*')
-            .eq('Placa', currentPlaca)
-            .order('Fecha', { ascending: false })
-            .limit(20);
+            .eq('email', email)
+            .single();
 
-        if (error) throw error;
+        if (admin && password === '123') { // Simplified pass check as per request
+            session = { email, role: 'admin', name: 'Administrador' };
+            saveSession();
+            showDashboard();
+            return;
+        }
+
+        // 2. Check Propietario Profile
+        const { data: prop } = await supabase
+            .from('perfiles_propietarios')
+            .select('*')
+            .eq('email', email)
+            .single();
+
+        if (prop && password === '123') {
+            // Find linked Placa from Aportes or Despachos using Cedula
+            const { data: plateData } = await supabase
+                .from('Aportes')
+                .select('Placa')
+                .eq('Cedula', prop.cedula)
+                .limit(1)
+                .single();
+
+            session = {
+                email,
+                role: 'propietario',
+                name: 'Propietario',
+                cedula: prop.cedula,
+                placaLinked: plateData ? plateData.Placa : ''
+            };
+            saveSession();
+            showDashboard();
+            return;
+        }
+
+        alert('Credenciales incorrectas o usuario no encontrado.');
+    } catch (err) {
+        console.error('Login error:', err);
+        alert('Error de conexión o validación.');
+    }
+}
+
+function saveSession() {
+    localStorage.setItem('sotracor_session', JSON.stringify(session));
+}
+
+function logout() {
+    localStorage.removeItem('sotracor_session');
+    location.reload();
+}
+
+function showLogin() {
+    loginOverlay.style.display = 'flex';
+    dashboardLayout.style.display = 'none';
+}
+
+function showDashboard() {
+    loginOverlay.style.display = 'none';
+    dashboardLayout.style.display = 'flex';
+
+    userDisplayName.textContent = session.name;
+    userDisplayRole.textContent = session.role;
+
+    // Apply automatic Placa filter if available
+    if (session.placaLinked) {
+        placaInput.value = session.placaLinked;
+        if (session.role === 'propietario') {
+            placaInput.readOnly = true;
+            placaInput.style.background = '#f1f5f9';
+        }
+    }
+
+    searchData();
+
+    // Tab Event Listeners
+    tabButtons.forEach(btn => {
+        btn.classList.toggle('active', btn.getAttribute('data-tab') === currentTab);
+        btn.onclick = () => {
+            tabButtons.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            currentTab = btn.getAttribute('data-tab');
+            searchData();
+        };
+    });
+}
+
+// --- Data Logic ---
+
+async function searchData() {
+    const start = dateStartInput.value;
+    const end = dateEndInput.value;
+    const placa = placaInput.value.trim().toUpperCase();
+
+    resultsContainer.innerHTML = '<div class="placeholder-view"><p class="placeholder-text">Cargando registros...</p></div>';
+
+    try {
+        let query = supabase.from(currentTab).select('*');
+
+        // Automatic Filtering
+        if (session.role === 'propietario') {
+            query = query.eq('Cedula', session.cedula);
+        } else if (placa) {
+            query = query.ilike('Placa', `%${placa}%`);
+        }
+
+        // Date Range Filtering (.gte / .lte)
+        // Most tables use 'Fecha'. Cartera/Aportes might use different ones but we verified 'Fecha' exists in Aportes too recently.
+        const dateCol = 'Fecha';
+
+        if (start) query = query.gte(dateCol, start);
+        if (end) query = query.lte(dateCol, end);
+
+        const { data, error } = await query.order(dateCol, { ascending: false }).limit(100);
+
+        if (error) {
+            // Fallback for Aportes if 'Fecha' fails (using 'Ult. Despacho' which we saw in schema)
+            if (currentTab === 'Aportes' && error.message.includes('Fecha')) {
+                const { data: fbData, error: fbErr } = await supabase.from('Aportes')
+                    .select('*')
+                    .eq(session.role === 'propietario' ? 'Cedula' : 'Placa', session.role === 'propietario' ? session.cedula : placa)
+                    .order('Ult. Despacho', { ascending: false });
+                if (fbErr) throw fbErr;
+                renderResults(fbData);
+                return;
+            }
+            throw error;
+        }
 
         renderResults(data);
         setupRealtime();
 
     } catch (err) {
-        console.error('Error fetching data:', err);
+        console.error('Fetch error:', err);
         resultsContainer.innerHTML = `<div class="placeholder-view"><p class="placeholder-text" style="color: #ef4444;">Error: ${err.message}</p></div>`;
     }
 }
 
 function setupRealtime() {
-    // Cleanup previous channel
-    if (realtimeChannel) {
-        supabase.removeChannel(realtimeChannel);
-    }
-
-    // Subscribe to changes on the current table and placa
-    realtimeChannel = supabase.channel(`public:${currentTab}`)
-        .on('postgres_changes', {
-            event: '*',
-            schema: 'public',
-            table: currentTab,
-            filter: `Placa=eq.${currentPlaca}`
-        }, payload => {
-            console.log('Realtime change detected:', payload);
-            searchData(); // Refresh data on change
-        })
+    if (realtimeChannel) supabase.removeChannel(realtimeChannel);
+    realtimeChannel = supabase.channel(`live:${currentTab}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: currentTab }, () => searchData())
         .subscribe();
 }
 
 function renderResults(data) {
     resultsContainer.innerHTML = '';
-
     if (!data || data.length === 0) {
-        resultsContainer.innerHTML = `
-            <div class="placeholder-view">
-                <p class="placeholder-text">No se hallaron registros para la placa ${currentPlaca} en ${currentTab}.</p>
-            </div>`;
+        resultsContainer.innerHTML = '<div class="placeholder-view"><p class="placeholder-text">No se hallaron registros para el criterio seleccionado.</p></div>';
         return;
     }
-
     data.forEach(item => {
         const card = document.createElement('div');
         card.className = 'vehicle-card';
-
-        let cardHtml = '';
-
-        if (currentTab === 'Despachos') {
-            cardHtml = renderDespacho(item);
-        } else if (currentTab === 'Cartera') {
-            cardHtml = renderCartera(item);
-        } else if (currentTab === 'Tiquetes') {
-            cardHtml = renderTiquete(item);
-        } else if (currentTab === 'Aportes') {
-            cardHtml = renderAporte(item);
-        }
-
-        card.innerHTML = cardHtml;
+        card.innerHTML = currentTab === 'Aportes' ? renderAporte(item) : renderGeneric(item);
         resultsContainer.appendChild(card);
     });
 }
 
-// --- Specific Rendering Functions ---
+// --- Utils ---
+const fmtMoney = (v) => {
+    // Convert to number explicitly as requested (Data Treatment)
+    let val = v;
+    if (typeof v === 'string') {
+        val = parseFloat(v.replace(/[^0-9.-]+/g, ""));
+    }
+    if (isNaN(val) || val === null) return '$0';
 
-function renderDespacho(item) {
-    return `
-        <div class="card-header">
-            <span class="vehicle-number">${item.Numero || 'N/A'}</span>
-            <span class="report-date">${item.Fecha || ''}</span>
-        </div>
-        <div class="card-body">
-            <div class="card-section">
-                <span class="section-label">LIQUIDACIÓN DESPACHO</span>
-                <div class="stat-row">
-                    <span class="stat-value">${item['Vr. Aporte'] || '$0'}</span>
-                    <span class="stat-info">Recaudado</span>
-                </div>
-            </div>
-            <div class="card-section">
-                <span class="section-label">DETALLES</span>
-                <div class="detail-list">
-                    <div class="detail-item"><span class="detail-label">Conductor:</span><span class="detail-value">${item.Conductor || '-'}</span></div>
-                    <div class="detail-item"><span class="detail-label">Ruta:</span><span class="detail-value">${item.Ruta || '-'}</span></div>
-                    <div class="detail-item"><span class="detail-label">Obs:</span><span class="detail-value">${item.Observacion || '-'}</span></div>
-                </div>
-            </div>
-        </div>`;
-}
+    return new Intl.NumberFormat('es-CO', {
+        style: 'currency',
+        currency: 'COP',
+        maximumFractionDigits: 0
+    }).format(val);
+};
 
-function renderCartera(item) {
-    return `
-        <div class="card-header">
-            <span class="vehicle-number">${item.Documento || 'DOC'}</span>
-            <span class="report-date">${item.Fecha || ''}</span>
-        </div>
-        <div class="card-body">
-            <div class="card-section">
-                <span class="section-label">SALDO PENDIENTE</span>
-                <div class="stat-row">
-                    <span class="stat-value" style="color: #ef4444;">${item['Total Deuda'] || '$0'}</span>
-                    <span class="stat-info">A pagar</span>
-                </div>
-            </div>
-            <div class="card-section">
-                <span class="section-label">CONCEPTO</span>
-                <div class="detail-list">
-                    <div class="detail-item"><span class="detail-label">Concepto:</span><span class="detail-value">${item.Concepto || '-'}</span></div>
-                    <div class="detail-item"><span class="detail-label">Vencimiento:</span><span class="detail-value">${item.Vencimiento || '-'}</span></div>
-                    <div class="detail-item"><span class="detail-label">Propietario:</span><span class="detail-value">${item['Nombre del Propietario'] || '-'}</span></div>
-                </div>
-            </div>
-        </div>`;
-}
-
-function renderTiquete(item) {
-    return `
-        <div class="card-header">
-            <span class="vehicle-number">${item['No. Tiquete'] || 'TIQ'}</span>
-            <span class="report-date">${item.Fecha || ''}</span>
-        </div>
-        <div class="card-body">
-            <div class="card-section">
-                <span class="section-label">VALOR TIQUETE</span>
-                <div class="stat-row">
-                    <span class="stat-value">${item['Valor Total'] || '$0'}</span>
-                    <span class="stat-info">Pasaje</span>
-                </div>
-            </div>
-            <div class="card-section">
-                <span class="section-label">DATOS VIAJE</span>
-                <div class="detail-list">
-                    <div class="detail-item"><span class="detail-label">Pasajero:</span><span class="detail-value">${item['Nombre del Pasajero'] || '-'}</span></div>
-                    <div class="detail-item"><span class="detail-label">Agencia:</span><span class="detail-value">${item.Agencia || '-'}</span></div>
-                    <div class="detail-item"><span class="detail-label">Destino:</span><span class="detail-value">${item['Destino Pasajero'] || '-'}</span></div>
-                </div>
-            </div>
-        </div>`;
-}
+// --- Specialized Renderers ---
 
 function renderAporte(item) {
+    // Exact mapping of columns with spaces as requested
+    const vrAportes = item['Vr. Aportes'];
+    const vrPlanilla = item['Vr. Planilla'];
+    const pctStr = item['% Cump'] || '0';
+    const pct = parseFloat(pctStr);
+    const date = item['Fecha'] || item['Ult. Despacho'] || '-';
+
+    let color = 'low';
+    if (pct >= 80) color = 'high';
+    else if (pct >= 50) color = 'mid';
+
     return `
         <div class="card-header">
-            <span class="vehicle-number">APORTE</span>
-            <span class="report-date">${item['Ult. Despacho'] || ''}</span>
+            <span class="vehicle-number">${item.Placa || 'REPORTE'}</span>
+            <span class="report-date">${date}</span>
         </div>
         <div class="card-body">
             <div class="card-section">
-                <span class="section-label">TOTAL APORTES</span>
+                <span class="section-label">LIQUIDACIÓN DE APORTES</span>
                 <div class="stat-row">
-                    <span class="stat-value">${item['Vr. Aportes'] || '$0'}</span>
-                    <span class="stat-info">Sinaltrainal</span>
+                    <span class="stat-value">${fmtMoney(vrAportes)}</span>
+                    <span class="stat-info">Recaudado</span>
+                </div>
+                <div class="progress-bar" style="margin-top: 8px;">
+                    <div class="progress-fill ${color}" style="width: ${Math.min(pct, 100)}%;"></div>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-top: 4px;">
+                    <span style="font-size: 0.65rem; font-weight: 700; color: var(--text-muted);">CUMPLIMIENTO:</span>
+                    <span class="badge ${pct >= 80 ? 'badge-green' : 'badge-yellow'}">${pct}%</span>
                 </div>
             </div>
             <div class="card-section">
-                <span class="section-label">ESTADO DE CUENTA</span>
+                <span class="section-label">DETALLES ECONÓMICOS</span>
                 <div class="detail-list">
-                    <div class="detail-item"><span class="detail-label">Vr. Planilla:</span><span class="detail-value">${item['Vr. Planilla'] || '-'}</span></div>
-                    <div class="detail-item"><span class="detail-label">Propietario:</span><span class="detail-value">${item.Propietario || '-'}</span></div>
+                    <div class="detail-item"><span class="detail-label">Vr. Planilla:</span><span class="detail-value">${fmtMoney(vrPlanilla)}</span></div>
+                    <div class="detail-item"><span class="detail-label">Nro Registro:</span><span class="detail-value">${item['No.'] || '-'}</span></div>
                     <div class="detail-item"><span class="detail-label">Estado:</span><span class="detail-value">${item.Estado || '-'}</span></div>
                 </div>
             </div>
         </div>`;
 }
+
+function renderGeneric(item) {
+    const val = item['Valor Total'] || item['Total Deuda'] || item['Vr. Aporte'] || '0';
+    const date = item['Fecha'] || '-';
+    return `
+        <div class="card-header">
+            <span class="vehicle-number">${item.Placa || 'V-00'}</span>
+            <span class="report-date">${date}</span>
+        </div>
+        <div class="card-body">
+            <div class="stat-row">
+                <span class="stat-value">${fmtMoney(val)}</span>
+                <span class="stat-info">Importe</span>
+            </div>
+            <div class="detail-list" style="margin-top: 1rem;">
+                <div class="detail-item"><span class="detail-label">Referencia:</span><span class="detail-value">${item.Ruta || item.Concepto || item.Agencia || '-'}</span></div>
+                <div class="detail-item"><span class="detail-label">Responsable:</span><span class="detail-value" style="font-size: 0.75rem;">${item.Conductor || item.Propietario || '-'}</span></div>
+            </div>
+        </div>`;
+}
+
+// --- Event Handlers ---
+btnDoLogin.onclick = login;
+btnLogout.onclick = logout;
+placaInput.onkeypress = (e) => { if (e.key === 'Enter') searchData(); };
+dateStartInput.onchange = searchData;
+dateEndInput.onchange = searchData;
+
