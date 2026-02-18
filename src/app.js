@@ -254,10 +254,10 @@ async function searchData() {
             query = query.eq('Cedula', session.cedula);
         }
 
-        // Date Range Filtering
-        const dateCol = 'Fecha';
-        if (start) query = query.gte(dateCol, start);
-        if (end) query = query.lte(dateCol, end);
+        // Date Range Filtering (Desactivado temporalmente por formatos de texto inconsistentes en BD)
+        // const dateCol = 'Fecha';
+        // if (start) query = query.gte(dateCol, start);
+        // if (end) query = query.lte(dateCol, end);
 
         const { data, error } = await query.limit(100);
 
@@ -289,12 +289,67 @@ function renderResults(data) {
         resultsContainer.innerHTML = '<div class="placeholder-view"><p class="placeholder-text">No se hallaron registros para el criterio seleccionado.</p></div>';
         return;
     }
+
+    // Inicializar acumuladores para sumatorias (Modo Administrador)
+    let totalPlanilla = 0;
+    let totalAportes = 0;
+    let sumCumplimiento = 0;
+    let countAportes = 0;
+
     data.forEach(item => {
+        // Cálculo de totales si es la pestaña de Aportes
+        if (currentTab === 'Aportes') {
+            const vPlanilla = parseFloat(item["Vr. Planilla"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
+            const vAportes = parseFloat(item["Vr. Aportes"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
+            const vCump = parseFloat(item["% Cump"]?.toString().replace(',', '.')) || 0;
+
+            totalPlanilla += vPlanilla;
+            totalAportes += vAportes;
+            sumCumplimiento += vCump;
+            countAportes++;
+        }
+
         const card = document.createElement('div');
         card.className = 'vehicle-card';
         card.innerHTML = currentTab === 'Aportes' ? renderAporte(item) : renderGeneric(item);
         resultsContainer.appendChild(card);
     });
+
+    // Añadir Tarjeta de Sumatorias si hay más de un registro y es modo admin
+    if (isAdmin && data.length > 1 && currentTab === 'Aportes') {
+        const avgCump = (sumCumplimiento / countAportes).toFixed(2);
+        const summaryCard = document.createElement('div');
+        summaryCard.className = 'vehicle-card summary-card';
+        summaryCard.style.border = '2px solid var(--primary-blue)';
+        summaryCard.style.background = '#f0f9ff';
+        summaryCard.innerHTML = `
+            <div class="card-header" style="background: var(--primary-blue); color: white;">
+                <span class="vehicle-number" style="background: white; color: var(--primary-blue);">TOTALES</span>
+                <span class="report-date">${data.length} VEHÍCULOS</span>
+            </div>
+            <div class="card-body">
+                <div class="card-section">
+                    <span class="section-label">TOTAL RECAUDADO FLOTA</span>
+                    <div class="stat-row">
+                        <span class="stat-value" style="color: var(--primary-blue);">${fmtMoney(totalAportes)}</span>
+                        <span class="stat-info">Vr. Aportes</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-top: 10px;">
+                        <span style="font-size: 0.75rem; font-weight: 700;">PROMEDIO CUMP:</span>
+                        <span class="badge ${avgCump >= 80 ? 'badge-green' : 'badge-yellow'}">${avgCump}%</span>
+                    </div>
+                </div>
+                <div class="card-section" style="margin-top: 15px; border-top: 1px dashed #cbd5e1; padding-top: 15px;">
+                    <div class="detail-list">
+                        <div class="detail-item">
+                            <span class="detail-label">Total Planilla:</span>
+                            <span class="detail-value">${fmtMoney(totalPlanilla)}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+        resultsContainer.appendChild(summaryCard);
+    }
 }
 
 // --- Utils ---
