@@ -211,10 +211,12 @@ function showDashboard() {
             btn.classList.add('active');
             currentTab = btn.getAttribute('data-tab');
             searchData();
-            if (isTotalAdmin) renderUploadCenter(); // Update button label
+            if (isTotalAdmin) renderUploadCenter();
         };
     });
 }
+
+// --- Upload Logic ---
 
 function renderUploadCenter() {
     let container = document.getElementById('upload-center-container');
@@ -234,7 +236,7 @@ function renderUploadCenter() {
                 <button id="btn-trigger-upload" class="tab-btn" style="width: 100%; text-align: left; background: #f1f5f9; padding: 10px; display: flex; align-items: center; gap: 8px;">
                     📁 Cargar CSV (${currentTab})
                 </button>
-                <div id="upload-status" style="font-size: 0.65rem; color: var(--text-muted);">Listo para cargar</div>
+                <div id="upload-status" style="font-size: 0.65rem; color: var(--text-muted); padding: 5px; word-break: break-all;">Listo para cargar</div>
                 <div id="upload-progress" style="display:none; height: 4px; background: #eee; border-radius: 2px;">
                     <div id="upload-progress-fill" style="height:100%; background: var(--primary-green); width: 0%; border-radius: 2px;"></div>
                 </div>
@@ -271,8 +273,14 @@ async function handleFileUpload(e) {
         complete: async (results) => {
             const rawData = results.data;
             const table = currentTab;
+
+            // Get database columns to ensure mapping
+            const { data: columnsData } = await supabase.rpc('get_table_columns', { table_name: table });
+            // Fallback if RPC is not available
+            const dbCols = columnsData || [];
+
             status.textContent = `Limpiando ${rawData.length} registros...`;
-            const cleanData = rawData.map(row => cleanRow(row, table));
+            const cleanData = rawData.map(row => cleanRow(row, table, dbCols));
 
             const chunkSize = 50;
             for (let i = 0; i < cleanData.length; i += chunkSize) {
@@ -280,6 +288,7 @@ async function handleFileUpload(e) {
                 const { error } = await supabase.from(table).insert(chunk);
                 if (error) {
                     status.innerHTML = `<span style="color:red">Error: ${error.message}</span>`;
+                    console.error("Insert error:", error);
                     return;
                 }
                 const percent = Math.round(((i + chunk.length) / cleanData.length) * 100);
@@ -293,24 +302,35 @@ async function handleFileUpload(e) {
     });
 }
 
-function cleanRow(row, table) {
+function cleanRow(row, table, dbCols) {
     const clean = {};
     for (let key in row) {
         let val = row[key];
-        if (key.includes('Vr.') || key.includes('Tarifa') || key.includes('Total') || key.includes('Recaudo') || key.includes('Deuda')) {
+        let dbKey = key.trim();
+
+        // Normalización de Clave (Casing)
+        if (dbKey.toLowerCase() === 'cedula') dbKey = 'Cedula';
+
+        // Limpieza de Columnas Monetarias
+        if (dbKey.includes('Vr.') || dbKey.includes('Tarifa') || dbKey.includes('Total') || dbKey.includes('Recaudo') || dbKey.includes('Deuda')) {
             val = parseFloat(val?.toString().replace(/[^0-9.-]+/g, "")) || 0;
         }
-        if (key === 'Fecha' && val) {
+
+        // Normalización de Fechas
+        if ((dbKey.toLowerCase() === 'fecha' || dbKey.includes('Fecha')) && val) {
             const normalized = val.replace(/-/g, '/');
             if (normalized.includes('/')) {
                 const parts = normalized.split('/');
                 if (parts.length === 3) {
                     const [d, m, y] = parts;
-                    val = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+                    // Handle YYYY-MM-DD or DD/MM/YYYY
+                    if (y.length === 4) val = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+                    else if (d.length === 4) val = `${d}-${m.padStart(2, '0')}-${y.padStart(2, '0')}`;
                 }
             }
         }
-        clean[key] = val;
+
+        clean[dbKey] = val;
     }
     return clean;
 }
@@ -325,6 +345,8 @@ function exportToExcel() {
     XLSX.utils.book_append_sheet(wb, ws, currentTab);
     XLSX.writeFile(wb, `Reporte_Sotracor_${currentTab}_${new Date().getTime()}.xlsx`);
 }
+
+// --- Data Logic ---
 
 async function searchData() {
     const start = dateStartInput.value;
@@ -350,6 +372,7 @@ async function searchData() {
         renderResults(data);
         setupRealtime();
     } catch (err) {
+        console.error("Search error:", err);
         resultsContainer.innerHTML = `<div class="placeholder-view"><p class="placeholder-text" style="color: #ef4444;">Error: ${err.message}</p></div>`;
     }
 }
@@ -373,15 +396,15 @@ function renderResults(data) {
 
     data.forEach(item => {
         if (currentTab === 'Aportes') {
-            totalPlanilla += parseFloat(item["Vr. Planilla"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
-            totalAportes += parseFloat(item["Vr. Aportes"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
-            sumCumplimiento += parseFloat(item["% Cump"]?.toString().replace(',', '.')) || 0;
+            totalPlanilla += parseFloat(item["Vr. Planilla"] || 0);
+            totalAportes += parseFloat(item["Vr. Aportes"] || 0);
+            sumCumplimiento += parseFloat(item["% Cump"]?.toString().replace(',', '.') || 0);
             countAportes++;
         }
         if (currentTab === 'Tiquetes') {
-            const t = parseFloat(item["Tarifa"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
-            const d = parseFloat(item["Vr. Descuento"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
-            const r = parseFloat(item["Vr. Recaudo"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
+            const t = parseFloat(item["Tarifa"] || 0);
+            const d = parseFloat(item["Vr. Descuento"] || 0);
+            const r = parseFloat(item["Vr. Recaudo"] || 0);
             if (String(item["Electronico"]) === "1") {
                 totalTarifaT += t; totalDescuentoT += d; totalRecaudadoT += r;
             }
@@ -396,55 +419,63 @@ function renderResults(data) {
     });
 
     if (currentTab === 'Tiquetes' && data.length > 0) {
-        const tSummary = document.createElement('div');
-        tSummary.className = 'vehicle-card summary-card';
-        tSummary.style.gridColumn = '1 / -1';
-        tSummary.style.border = '2px solid #5b21b6';
-        tSummary.style.background = '#f5f3ff';
-        tSummary.innerHTML = `
-            <div class="card-header" style="background: #5b21b6; color: white;">
-                <span class="vehicle-number" style="background: white; color: #5b21b6;">RESUMEN TIQUETEO</span>
-            </div>
-            <div class="card-body" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem;">
-                <div class="card-section">
-                    <span class="section-label">TIQUETEO</span>
-                    <div class="detail-list">
-                        <div class="detail-item"><span class="detail-label">Tarifa Total:</span><span class="detail-value">${fmtMoney(totalTarifaT)}</span></div>
-                        <div class="detail-item"><span class="detail-label">Descuentos:</span><span class="detail-value" style="color: #ef4444;">-${fmtMoney(totalDescuentoT)}</span></div>
-                        <div class="detail-item" style="border-top: 1px solid #ddd; padding-top: 8px;"><span class="detail-label" style="font-weight: 800;">RECAUDADO:</span><span class="detail-value" style="color: #16a34a; font-size: 1.1rem;">${fmtMoney(totalRecaudadoT)}</span></div>
-                    </div>
-                </div>
-                <div class="card-section" style="border-left: 1px dashed #ddd; padding-left: 1.5rem;">
-                    <span class="section-label">PROYECCIÓN GLOBAL</span>
-                    <div class="stat-row"><span class="stat-value" style="color: #4338ca;">${fmtMoney(totalProyectadoT)}</span></div>
-                    <span class="stat-info">TIQUETEO PROYECTADO</span>
-                </div>
-            </div>`;
-        resultsContainer.prepend(tSummary);
+        renderTiqueteSummary(totalTarifaT, totalDescuentoT, totalRecaudadoT, totalProyectadoT);
     }
     if (isAdmin && data.length > 1 && currentTab === 'Aportes') {
-        const avg = (sumCumplimiento / countAportes).toFixed(2);
-        const aSummary = document.createElement('div');
-        aSummary.className = 'vehicle-card summary-card';
-        aSummary.style.border = '2px solid var(--primary-blue)';
-        aSummary.style.background = '#f0f9ff';
-        aSummary.innerHTML = `
-            <div class="card-header" style="background: var(--primary-blue); color: white;">
-                <span class="vehicle-number" style="background: white; color: var(--primary-blue);">TOTALES</span>
-                <span class="report-date">${data.length} VEHÍCULOS</span>
-            </div>
-            <div class="card-body">
-                <div class="card-section">
-                    <span class="section-label">TOTAL RECAUDADO FLOTA</span>
-                    <div class="stat-row"><span class="stat-value" style="color: var(--primary-blue);">${fmtMoney(totalAportes)}</span><span class="stat-info">Vr. Aportes</span></div>
-                    <div style="display: flex; justify-content: space-between; margin-top: 10px;"><span style="font-size: 0.75rem; font-weight: 700;">PROMEDIO CUMP:</span><span class="badge ${avg >= 80 ? 'badge-green' : 'badge-yellow'}">${avg}%</span></div>
-                </div>
-                <div class="card-section" style="margin-top: 15px; border-top: 1px dashed #cbd5e1; padding-top: 15px;">
-                    <div class="detail-list"><div class="detail-item"><span class="detail-label">Total Planilla:</span><span class="detail-value">${fmtMoney(totalPlanilla)}</span></div></div>
-                </div>
-            </div>`;
-        resultsContainer.appendChild(aSummary);
+        renderAporteSummary(totalAportes, totalPlanilla, sumCumplimiento, countAportes, data.length);
     }
+}
+
+function renderTiqueteSummary(tt, td, tr, tp) {
+    const s = document.createElement('div');
+    s.className = 'vehicle-card summary-card';
+    s.style.gridColumn = '1 / -1';
+    s.style.border = '2px solid #5b21b6';
+    s.style.background = '#f5f3ff';
+    s.innerHTML = `
+        <div class="card-header" style="background: #5b21b6; color: white;">
+            <span class="vehicle-number" style="background: white; color: #5b21b6;">RESUMEN TIQUETEO</span>
+        </div>
+        <div class="card-body" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem;">
+            <div class="card-section">
+                <span class="section-label">TIQUETEO</span>
+                <div class="detail-list">
+                    <div class="detail-item"><span class="detail-label">Tarifa Total:</span><span class="detail-value">${fmtMoney(tt)}</span></div>
+                    <div class="detail-item"><span class="detail-label">Descuentos:</span><span class="detail-value" style="color: #ef4444;">-${fmtMoney(td)}</span></div>
+                    <div class="detail-item" style="border-top: 1px solid #ddd; padding-top: 8px;"><span class="detail-label" style="font-weight: 800;">RECAUDADO:</span><span class="detail-value" style="color: #16a34a; font-size: 1.1rem;">${fmtMoney(tr)}</span></div>
+                </div>
+            </div>
+            <div class="card-section" style="border-left: 1px dashed #ddd; padding-left: 1.5rem;">
+                <span class="section-label">PROYECCIÓN GLOBAL</span>
+                <div class="stat-row"><span class="stat-value" style="color: #4338ca;">${fmtMoney(tp)}</span></div>
+                <span class="stat-info">TIQUETEO PROYECTADO</span>
+            </div>
+        </div>`;
+    resultsContainer.prepend(s);
+}
+
+function renderAporteSummary(ta, tp, sc, ca, count) {
+    const avg = (sc / ca).toFixed(2);
+    const s = document.createElement('div');
+    s.className = 'vehicle-card summary-card';
+    s.style.border = '2px solid var(--primary-blue)';
+    s.style.background = '#f0f9ff';
+    s.innerHTML = `
+        <div class="card-header" style="background: var(--primary-blue); color: white;">
+            <span class="vehicle-number" style="background: white; color: var(--primary-blue);">TOTALES</span>
+            <span class="report-date">${count} VEHÍCULOS</span>
+        </div>
+        <div class="card-body">
+            <div class="card-section">
+                <span class="section-label">TOTAL RECAUDADO FLOTA</span>
+                <div class="stat-row"><span class="stat-value" style="color: var(--primary-blue);">${fmtMoney(ta)}</span><span class="stat-info">Vr. Aportes</span></div>
+                <div style="display: flex; justify-content: space-between; margin-top: 10px;"><span style="font-size: 0.75rem; font-weight: 700;">PROMEDIO CUMP:</span><span class="badge ${avg >= 80 ? 'badge-green' : 'badge-yellow'}">${avg}%</span></div>
+            </div>
+            <div class="card-section" style="margin-top: 15px; border-top: 1px dashed #cbd5e1; padding-top: 15px;">
+                <div class="detail-list"><div class="detail-item"><span class="detail-label">Total Planilla:</span><span class="detail-value">${fmtMoney(tp)}</span></div></div>
+            </div>
+        </div>`;
+    resultsContainer.appendChild(s);
 }
 
 const fmtMoney = (v) => {
@@ -463,23 +494,21 @@ const fmtDate = (d) => {
     return d;
 };
 
+// --- Specialized Renderers ---
+
 function renderTiquete(item) {
-    const t = parseFloat(item["Tarifa"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
-    const d = parseFloat(item["Vr. Descuento"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
-    const r = parseFloat(item["Vr. Recaudo"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
-    const e = (item["Estado Envio"] || "SIN ESTADO").toUpperCase();
     return `
         <div class="card-header"><span class="vehicle-number">${item.Placa || 'TKT'}</span><span class="report-date">${fmtDate(item.Fecha)}</span></div>
         <div class="card-body">
             <div class="card-section">
                 <span class="section-label">TIQUETE: ${item["No. Tiquete"] || '-'}</span>
-                <div class="stat-row"><span class="stat-value">${fmtMoney(r)}</span><span class="stat-info">Recaudado</span></div>
-                <div class="badge ${e === 'DOCUMENTO ENVIADO' ? 'badge-green' : 'badge-yellow'}" style="margin-top: 8px; font-size: 0.6rem;">${e}</div>
+                <div class="stat-row"><span class="stat-value">${fmtMoney(item["Vr. Recaudo"] || 0)}</span><span class="stat-info">Recaudado</span></div>
+                <div class="badge ${(item["Estado Envio"] || '').includes('ENVIADO') ? 'badge-green' : 'badge-yellow'}" style="margin-top: 8px; font-size: 0.6rem;">${item["Estado Envio"] || 'SIN ESTADO'}</div>
             </div>
             <div class="card-section">
                 <div class="detail-list">
-                    <div class="detail-item"><span class="detail-label">Tarifa:</span><span class="detail-value">${fmtMoney(t)}</span></div>
-                    <div class="detail-item"><span class="detail-label">Descuento:</span><span class="detail-value" style="color: #ef4444;">${d > 0 ? '-' : ''}${fmtMoney(d)}</span></div>
+                    <div class="detail-item"><span class="detail-label">Tarifa:</span><span class="detail-value">${fmtMoney(item["Tarifa"] || 0)}</span></div>
+                    <div class="detail-item"><span class="detail-label">Descuento:</span><span class="detail-value" style="color: #ef4444;">${fmtMoney(item["Vr. Descuento"] || 0)}</span></div>
                     <div class="detail-item"><span class="detail-label">Pasajero:</span><span class="detail-value" style="font-size: 0.7rem;">${item["Nombre del Pasajero"] || '-'}</span></div>
                 </div>
             </div>
@@ -487,34 +516,35 @@ function renderTiquete(item) {
 }
 
 function renderAporte(item) {
-    const vA = parseFloat(item["Vr. Aportes"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
-    const vP = parseFloat(item["Vr. Planilla"]?.toString().replace(/[^0-9.-]+/g, "")) || 0;
-    const pN = parseFloat(item["% Cump"]?.toString().replace(',', '.')) || 0;
+    const pN = parseFloat(item["% Cump"]?.toString().replace(',', '.') || 0);
     let color = pN >= 80 ? 'high' : pN >= 50 ? 'mid' : 'low';
     return `
         <div class="card-header"><span class="vehicle-number">${item.Placa || 'FLOTA'}</span><span class="report-date">${fmtDate(item.Fecha)}</span></div>
         <div class="card-body">
             <div class="card-section">
                 <span class="section-label">LIQUIDACIÓN DE FLOTA</span>
-                <div class="stat-row"><span class="stat-value">${fmtMoney(vA)}</span><span class="stat-info">Vr. Aportes</span></div>
+                <div class="stat-row"><span class="stat-value">${fmtMoney(item["Vr. Aportes"] || 0)}</span><span class="stat-info">Vr. Aportes</span></div>
                 <div class="progress-bar" style="margin-top:8px;"><div class="progress-fill ${color}" style="width: ${Math.min(pN, 100)}%;"></div></div>
                 <div style="display:flex; justify-content:space-between; margin-top:4px;"><span style="font-size:0.65rem; font-weight:700; color:var(--text-muted);">% CUMP:</span><span class="badge ${pN >= 80 ? 'badge-green' : 'badge-yellow'}">${pN}%</span></div>
             </div>
             <div class="card-section">
                 <div class="detail-list">
-                    <div class="detail-item"><span class="detail-label">Vr. Planilla:</span><span class="detail-value">${fmtMoney(vP)}</span></div>
-                    <div class="detail-item"><span class="detail-label">Propietario:</span><span class="detail-value" style="font-size:0.7rem;">${item.Propietario || '-'}</span></div>
+                    <div class="detail-item"><span class="detail-label">Vr. Planilla:</span><span class="detail-value">${fmtMoney(item["Vr. Planilla"] || 0)}</span></div>
+                    <div class="detail-item"><span class="detail-label">Propietario:</span><span class="detail-value" style="font-size:0.75rem; text-align:right;">${item.Propietario || '-'}</span></div>
                 </div>
             </div>
         </div>`;
 }
 
 function renderGeneric(item) {
-    const v = item['Valor Total'] || item['Total Deuda'] || item['Vr. Aporte'] || '0';
+    const val = item['Valor Total'] || item['Total Deuda'] || item['Vr. Aporte'] || '0';
     return `
         <div class="card-header"><span class="vehicle-number">${item.Placa || 'V-00'}</span><span class="report-date">${fmtDate(item.Fecha)}</span></div>
-        <div class="card-body"><div class="stat-row"><span class="stat-value">${fmtMoney(v)}</span><span class="stat-info">Importe</span></div>
-        <div class="detail-list" style="margin-top:1rem;"><div class="detail-item"><span class="detail-label">Referencia:</span><span class="detail-value">${item.Ruta || item.Concepto || item.Agencia || '-'}</span></div></div></div>`;
+        <div class="card-body"><div class="stat-row"><span class="stat-value">${fmtMoney(val)}</span><span class="stat-info">Importe</span></div>
+        <div class="detail-list" style="margin-top:1rem;">
+            <div class="detail-item"><span class="detail-label">Referencia:</span><span class="detail-value">${item.Ruta || item.Concepto || item.Agencia || '-'}</span></div>
+            <div class="detail-item"><span class="detail-label">Responsable:</span><span class="detail-value" style="font-size: 0.75rem;">${item.Conductor || item.Propietario || '-'}</span></div>
+        </div></div>`;
 }
 
 async function loadPlacaSelector() {
@@ -527,6 +557,7 @@ async function loadPlacaSelector() {
     datalist.innerHTML = unique.map(p => `<option value="${p}">`).join('');
 }
 
+// --- Event Listeners ---
 btnDoLogin.onclick = login;
 btnLogout.onclick = logout;
 placaInput.onkeypress = (e) => { if (e.key === 'Enter') searchData(); };
