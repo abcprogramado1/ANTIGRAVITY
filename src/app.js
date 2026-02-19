@@ -447,25 +447,74 @@ async function searchData() {
 
     try {
         let query = supabase.from(currentTab).select('*');
+
+        // 1. Fetch data for cards (keep 10,000 limit for UI performance)
+        let mainQuery = supabase.from(currentTab).select('*');
         if (session.role === 'ADMIN_TOTAL' || isAdmin) {
-            if (placa) query = query.ilike('Placa', `%${placa}%`);
+            if (placa) mainQuery = mainQuery.ilike('Placa', `%${placa}%`);
         } else {
-            query = query.eq('Cedula', session.cedula);
+            mainQuery = mainQuery.eq('Cedula', session.cedula);
         }
 
         const dateCol = 'Fecha';
-        if (start) query = query.gte(dateCol, start);
-        if (end) query = query.lte(dateCol, end);
+        if (start) mainQuery = mainQuery.gte(dateCol, start);
+        if (end) mainQuery = mainQuery.lte(dateCol, end);
 
-        const { data, error } = await query.order(dateCol, { ascending: false }).limit(10000);
+        const { data, error } = await mainQuery.order(dateCol, { ascending: false }).limit(10000);
         if (error) throw error;
 
         currentLoadedData = data;
         renderResults(data);
+
+        // 2. FETCH TOTALS (Aggregated) for Dashboard Header
+        // This solves the problem when data > 10,000 and no specific plate is selected
+        if (!placa && (session.role === 'ADMIN_TOTAL' || isAdmin)) {
+            fetchGlobalTotals(currentTab, start, end);
+        }
+
         setupRealtime();
     } catch (err) {
         console.error("Search error:", err);
         resultsContainer.innerHTML = `<div class="placeholder-view"><p class="placeholder-text" style="color: #ef4444;">Error: ${err.message}</p></div>`;
+    }
+}
+
+async function fetchGlobalTotals(table, start, end) {
+    try {
+        // We use supabase.rpc or sum/count features
+        // Note: Summing via RPC is most efficient for 100k+ rows
+        let selectStr = '';
+        if (table === 'Tiquetes') {
+            // Need several sums
+            const { data: tTotals } = await supabase.rpc('get_tiquetes_totals', {
+                p_start: start || '1900-01-01',
+                p_end: end || '2100-01-01'
+            });
+            if (tTotals && tTotals[0]) {
+                const { total_tarifa, total_descuento, total_recaudo, proyectado } = tTotals[0];
+                renderTiqueteSummary(total_tarifa, total_descuento, total_recaudo, proyectado, true);
+            }
+        } else if (table === 'Aportes') {
+            const { data: aTotals } = await supabase.rpc('get_aportes_totals', {
+                p_start: start || '1900-01-01',
+                p_end: end || '2100-01-01'
+            });
+            if (aTotals && aTotals[0]) {
+                const { total_aportes, total_planilla, avg_cump, count_v } = aTotals[0];
+                renderAporteSummary(total_aportes, total_planilla, avg_cump, 1, count_v, true);
+            }
+        } else if (table === 'Cartera') {
+            const { data: cTotals } = await supabase.rpc('get_cartera_totals', {
+                p_start: start || '1900-01-01',
+                p_end: end || '2100-01-01'
+            });
+            if (cTotals && cTotals[0]) {
+                const { total_deuda, count_r } = cTotals[0];
+                renderCarteraSummary(total_deuda, count_r, true);
+            }
+        }
+    } catch (e) {
+        console.warn("Global totals fetch failed, using frontend fallback", e);
     }
 }
 
@@ -527,15 +576,20 @@ function renderResults(data) {
 }
 
 // Summary Component Renderers
-function renderTiqueteSummary(tt, td, tr, tp) {
-    const s = document.createElement('div');
-    s.className = 'vehicle-card summary-card';
-    s.style.gridColumn = '1 / -1';
-    s.style.border = '2px solid #5b21b6';
-    s.style.background = '#f5f3ff';
+function renderTiqueteSummary(tt, td, tr, tp, isGlobal = false) {
+    let s = document.getElementById('summary-tiquetes');
+    if (!s) {
+        s = document.createElement('div');
+        s.id = 'summary-tiquetes';
+        s.className = 'vehicle-card summary-card';
+        s.style.gridColumn = '1 / -1';
+        s.style.border = '2px solid #5b21b6';
+        s.style.background = '#f5f3ff';
+        resultsContainer.prepend(s);
+    }
     s.innerHTML = `
         <div class="card-header" style="background: #5b21b6; color: white;">
-            <span class="vehicle-number" style="background: white; color: #5b21b6;">RESUMEN TIQUETEO</span>
+            <span class="vehicle-number" style="background: white; color: #5b21b6;">RESUMEN TIQUETEO ${isGlobal ? 'TOTAL' : ''}</span>
         </div>
         <div class="card-body" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem;">
             <div class="card-section">
@@ -550,21 +604,26 @@ function renderTiqueteSummary(tt, td, tr, tp) {
                 <span class="section-label">PROYECCIÓN GLOBAL</span>
                 <div class="stat-row"><span class="stat-value" style="color: #4338ca;">${fmtMoney(tp)}</span></div>
                 <span class="stat-info">TIQUETEO PROYECTADO</span>
+                ${isGlobal ? '<span style="font-size: 0.6rem; color: #6d28d9; display: block; margin-top: 5px;">(Calculado sobre 100k+ registros)</span>' : ''}
             </div>
         </div>`;
-    resultsContainer.prepend(s);
 }
 
-function renderAporteSummary(ta, tp, sc, ca, count) {
-    const avg = (sc / ca).toFixed(2);
-    const s = document.createElement('div');
-    s.className = 'vehicle-card summary-card';
-    s.style.gridColumn = '1 / -1';
-    s.style.border = '2px solid var(--primary-blue)';
-    s.style.background = '#f0f9ff';
+function renderAporteSummary(ta, tp, sc, ca, count, isGlobal = false) {
+    const avg = isGlobal ? sc : (sc / ca).toFixed(2);
+    let s = document.getElementById('summary-aportes');
+    if (!s) {
+        s = document.createElement('div');
+        s.id = 'summary-aportes';
+        s.className = 'vehicle-card summary-card';
+        s.style.gridColumn = '1 / -1';
+        s.style.border = '2px solid var(--primary-blue)';
+        s.style.background = '#f0f9ff';
+        resultsContainer.prepend(s);
+    }
     s.innerHTML = `
         <div class="card-header" style="background: var(--primary-blue); color: white;">
-            <span class="vehicle-number" style="background: white; color: var(--primary-blue);">RESUMEN APORTES</span>
+            <span class="vehicle-number" style="background: white; color: var(--primary-blue);">RESUMEN APORTES ${isGlobal ? 'TOTAL' : ''}</span>
         </div>
         <div class="card-body" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem;">
             <div class="card-section">
@@ -578,20 +637,25 @@ function renderAporteSummary(ta, tp, sc, ca, count) {
                 <span class="section-label">DESEMPEÑO</span>
                 <div class="stat-row"><span class="stat-value" style="color: #2563eb;">${avg}%</span></div>
                 <span class="stat-info">CUMPLIMIENTO PROMEDIO (${count} VEHÍCULOS)</span>
+                ${isGlobal ? '<span style="font-size: 0.6rem; color: #1d4ed8; display: block; margin-top: 5px;">(Calculado sobre historial completo)</span>' : ''}
             </div>
         </div>`;
-    resultsContainer.prepend(s);
 }
 
-function renderCarteraSummary(total, count) {
-    const s = document.createElement('div');
-    s.className = 'vehicle-card summary-card';
-    s.style.gridColumn = '1 / -1';
-    s.style.border = '2px solid #ea580c';
-    s.style.background = '#fff7ed';
+function renderCarteraSummary(total, count, isGlobal = false) {
+    let s = document.getElementById('summary-cartera');
+    if (!s) {
+        s = document.createElement('div');
+        s.id = 'summary-cartera';
+        s.className = 'vehicle-card summary-card';
+        s.style.gridColumn = '1 / -1';
+        s.style.border = '2px solid #ea580c';
+        s.style.background = '#fff7ed';
+        resultsContainer.prepend(s);
+    }
     s.innerHTML = `
         <div class="card-header" style="background: #ea580c; color: white;">
-            <span class="vehicle-number" style="background: white; color: #ea580c;">RESUMEN CARTERA</span>
+            <span class="vehicle-number" style="background: white; color: #ea580c;">RESUMEN CARTERA ${isGlobal ? 'TOTAL' : ''}</span>
         </div>
         <div class="card-body" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem;">
             <div class="card-section">
@@ -605,9 +669,9 @@ function renderCarteraSummary(total, count) {
                 <span class="section-label">VOLUMEN</span>
                 <div class="stat-row"><span class="stat-value" style="color: #475569;">${count}</span></div>
                 <span class="stat-info">REGISTROS PENDIENTES</span>
+                ${isGlobal ? '<span style="font-size: 0.6rem; color: #9a3412; display: block; margin-top: 5px;">(Suma de todas las obligaciones)</span>' : ''}
             </div>
         </div>`;
-    resultsContainer.prepend(s);
 }
 
 // Utility Formatters
