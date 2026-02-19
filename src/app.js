@@ -485,6 +485,7 @@ function renderResults(data) {
 
     let totalPlanilla = 0, totalAportes = 0, sumCumplimiento = 0, countAportes = 0;
     let totalTarifaT = 0, totalDescuentoT = 0, totalRecaudadoT = 0, totalProyectadoT = 0;
+    let totalCarteraDeuda = 0, countCartera = 0;
 
     data.forEach(item => {
         if (currentTab === 'Aportes') {
@@ -502,6 +503,10 @@ function renderResults(data) {
             }
             totalProyectadoT += r;
         }
+        if (currentTab === 'Cartera') {
+            totalCarteraDeuda += parseFloat(item["Total Deuda"] || 0);
+            countCartera++;
+        }
 
         const card = document.createElement('div');
         card.className = 'vehicle-card';
@@ -513,8 +518,11 @@ function renderResults(data) {
     if (currentTab === 'Tiquetes' && data.length > 0) {
         renderTiqueteSummary(totalTarifaT, totalDescuentoT, totalRecaudadoT, totalProyectadoT);
     }
-    if (isAdmin && data.length > 1 && currentTab === 'Aportes') {
+    if (currentTab === 'Aportes' && data.length > 0) {
         renderAporteSummary(totalAportes, totalPlanilla, sumCumplimiento, countAportes, data.length);
+    }
+    if (currentTab === 'Cartera' && data.length > 0) {
+        renderCarteraSummary(totalCarteraDeuda, countCartera);
     }
 }
 
@@ -551,24 +559,55 @@ function renderAporteSummary(ta, tp, sc, ca, count) {
     const avg = (sc / ca).toFixed(2);
     const s = document.createElement('div');
     s.className = 'vehicle-card summary-card';
+    s.style.gridColumn = '1 / -1';
     s.style.border = '2px solid var(--primary-blue)';
     s.style.background = '#f0f9ff';
     s.innerHTML = `
         <div class="card-header" style="background: var(--primary-blue); color: white;">
-            <span class="vehicle-number" style="background: white; color: var(--primary-blue);">TOTALES</span>
-            <span class="report-date">${count} VEHÍCULOS</span>
+            <span class="vehicle-number" style="background: white; color: var(--primary-blue);">RESUMEN APORTES</span>
         </div>
-        <div class="card-body">
+        <div class="card-body" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem;">
             <div class="card-section">
-                <span class="section-label">TOTAL RECAUDADO FLOTA</span>
-                <div class="stat-row"><span class="stat-value" style="color: var(--primary-blue);">${fmtMoney(ta)}</span><span class="stat-info">Vr. Aportes</span></div>
-                <div style="display: flex; justify-content: space-between; margin-top: 10px;"><span style="font-size: 0.75rem; font-weight: 700;">PROMEDIO CUMP:</span><span class="badge ${avg >= 80 ? 'badge-green' : 'badge-yellow'}">${avg}%</span></div>
+                <span class="section-label">LIQUIDACIÓN FLOTA</span>
+                <div class="detail-list">
+                    <div class="detail-item"><span class="detail-label">Recaudo Aportes:</span><span class="detail-value" style="color: #16a34a; font-weight: 800; font-size: 1.1rem;">${fmtMoney(ta)}</span></div>
+                    <div class="detail-item"><span class="detail-label">Valor Planilla:</span><span class="detail-value">${fmtMoney(tp)}</span></div>
+                </div>
             </div>
-            <div class="card-section" style="margin-top: 15px; border-top: 1px dashed #cbd5e1; padding-top: 15px;">
-                <div class="detail-list"><div class="detail-item"><span class="detail-label">Total Planilla:</span><span class="detail-value">${fmtMoney(tp)}</span></div></div>
+            <div class="card-section" style="border-left: 1px dashed #ddd; padding-left: 1.5rem;">
+                <span class="section-label">DESEMPEÑO</span>
+                <div class="stat-row"><span class="stat-value" style="color: #2563eb;">${avg}%</span></div>
+                <span class="stat-info">CUMPLIMIENTO PROMEDIO (${count} VEHÍCULOS)</span>
             </div>
         </div>`;
-    resultsContainer.appendChild(s);
+    resultsContainer.prepend(s);
+}
+
+function renderCarteraSummary(total, count) {
+    const s = document.createElement('div');
+    s.className = 'vehicle-card summary-card';
+    s.style.gridColumn = '1 / -1';
+    s.style.border = '2px solid #ea580c';
+    s.style.background = '#fff7ed';
+    s.innerHTML = `
+        <div class="card-header" style="background: #ea580c; color: white;">
+            <span class="vehicle-number" style="background: white; color: #ea580c;">RESUMEN CARTERA</span>
+        </div>
+        <div class="card-body" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem;">
+            <div class="card-section">
+                <span class="section-label">SALDO PENDIENTE</span>
+                <div class="stat-row">
+                    <span class="stat-value" style="color: #c2410c;">${fmtMoney(total)}</span>
+                </div>
+                <span class="stat-info">DEUDA TOTAL FLOTA</span>
+            </div>
+            <div class="card-section" style="border-left: 1px dashed #ddd; padding-left: 1.5rem;">
+                <span class="section-label">VOLUMEN</span>
+                <div class="stat-row"><span class="stat-value" style="color: #475569;">${count}</span></div>
+                <span class="stat-info">REGISTROS PENDIENTES</span>
+            </div>
+        </div>`;
+    resultsContainer.prepend(s);
 }
 
 // Utility Formatters
